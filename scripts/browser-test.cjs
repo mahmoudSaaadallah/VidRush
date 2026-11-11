@@ -5,12 +5,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const http = require('node:http');
+const { pathToFileURL } = require('node:url');
 const { extensionId } = require('./install.cjs');
+const { installExtension } = require('./setup.cjs');
 const root = path.resolve(__dirname, '..');
 
 async function main() {
   const artifacts = path.join(root, 'artifacts'); fs.mkdirSync(artifacts, { recursive: true });
-  const extensionPath = path.join(root, 'extension');
+  const extensionPath = process.argv.includes('--installed')
+    ? path.join(process.env.LOCALAPPDATA, 'VidRush', 'extension') : path.join(root, 'extension');
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'vidrush-browser-'));
   const context = await chromium.launchPersistentContext(profile, {
     channel: 'chromium', headless: true,
@@ -22,7 +25,7 @@ async function main() {
     const errors = [];
     let worker = context.serviceWorkers()[0];
     if (!worker) worker = await context.waitForEvent('serviceworker');
-    const id = extensionId(require('../extension/manifest.json').key);
+    const id = extensionId(JSON.parse(fs.readFileSync(path.join(extensionPath, 'manifest.json'), 'utf8')).key);
     assert.equal(new URL(worker.url()).host, id);
     assert.deepEqual(await worker.evaluate(() => chrome.runtime.getManifest().permissions), ['activeTab', 'nativeMessaging', 'storage']);
     console.log(`Real extension loaded: ${id}`);
@@ -109,6 +112,20 @@ async function main() {
     await page.screenshot({ path: path.join(artifacts, 'popup-setup.png'), fullPage: true });
     assert.deepEqual(errors, []);
     console.log('Popup quality selection, download, progress, cancellation, setup, error handling, RTL layout and text safety passed.');
+    const guide = installExtension(root, path.join(profile, 'VidRush & اسم'), 'D:\\My Videos');
+    await page.goto(pathToFileURL(guide.guidePath).href);
+    assert.equal(await page.locator('#extension-path').inputValue(), guide.extensionPath);
+    await page.evaluate(() => { Object.defineProperty(navigator, 'clipboard', { value: { writeText: async value => { window.copiedPath = value; } }, configurable: true }); });
+    await page.locator('#copy-path').click();
+    assert.equal(await page.evaluate(() => window.copiedPath), guide.extensionPath);
+    await page.evaluate(() => { Object.defineProperty(navigator, 'clipboard', { value: { writeText: async () => { throw new Error('Clipboard unavailable'); } }, configurable: true }); });
+    await page.locator('#copy-path').click();
+    assert.match(await page.locator('#copy-status').innerText(), /Ctrl\+C/);
+    await page.setViewportSize({ width: 375, height: 850 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), false);
+    await page.screenshot({ path: path.join(artifacts, 'setup-guide.png'), fullPage: true });
+    assert.deepEqual(errors, []);
+    console.log('Installed setup guide, escaped Unicode paths, copy/fallback actions and narrow layout passed.');
   } finally {
     if (server) await new Promise(resolve => server.close(resolve));
     await context.close();

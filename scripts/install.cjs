@@ -8,6 +8,7 @@ const crypto = require('node:crypto');
 const { Readable, Transform } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
 const { execFileSync, execFile } = require('node:child_process');
+const { installExtension, openGuide, assertCompanionStopped } = require('./setup.cjs');
 
 const root = path.resolve(__dirname, '..');
 const HOST = 'com.vidrush.companion';
@@ -102,11 +103,12 @@ function findFile(directory, filename) {
 
 async function install() {
   if (process.platform !== 'win32') throw new Error('This installer currently supports Windows only.');
-  if (Number(process.versions.node.split('.')[0]) < 22) throw new Error('Install Node.js 22 or newer, then retry.');
+  if (Number(process.versions.node.split('.')[0]) < 22) throw new Error('Run Install.cmd to prepare a supported local runtime.');
   if (!['x64', 'arm64'].includes(process.arch)) throw new Error('Use 64-bit Windows with x64 or ARM64 Node.js.');
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'extension', 'manifest.json'), 'utf8'));
   const id = extensionId(manifest.key);
   const destination = path.join(process.env.LOCALAPPDATA, 'VidRush');
+  assertCompanionStopped(destination);
   const bin = path.join(destination, 'bin');
   const runtime = path.join(destination, 'runtime');
   const host = path.join(destination, 'host');
@@ -145,7 +147,11 @@ async function install() {
       if (filename.endsWith('.dll')) fs.copyFileSync(path.join(ffBin, filename), path.join(bin, filename));
     }
     fs.copyFileSync(path.join(stage, 'yt-dlp.exe'), path.join(bin, 'yt-dlp.exe'));
-    fs.copyFileSync(process.execPath, path.join(runtime, 'node.exe'));
+    if (path.resolve(process.execPath).toLowerCase() !== path.resolve(path.join(runtime, 'node.exe')).toLowerCase()) {
+      fs.copyFileSync(process.execPath, path.join(runtime, 'node.exe'));
+    }
+    const nodeLicense = path.join(path.dirname(process.execPath), 'LICENSE');
+    if (fs.existsSync(nodeLicense)) fs.copyFileSync(nodeLicense, path.join(runtime, 'LICENSE'));
     for (const file of fs.readdirSync(path.join(root, 'host'))) {
       if (file.endsWith('.cjs')) fs.copyFileSync(path.join(root, 'host', file), path.join(host, file));
     }
@@ -161,6 +167,7 @@ async function install() {
       nodePath: path.join(runtime, 'node.exe'), downloadDir: previous.downloadDir || path.join(downloads, 'VidRush'),
     };
     fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+    const { extensionPath, guidePath } = installExtension(root, destination, config.downloadDir);
     const launcher = path.join(destination, 'host.cmd');
     fs.writeFileSync(launcher, '@echo off\r\n"%~dp0runtime\\node.exe" "%~dp0host\\index.cjs" %*\r\n', 'ascii');
     const hostManifest = path.join(destination, `${HOST}.json`);
@@ -169,8 +176,10 @@ async function install() {
     const version = execFileSync(config.ytdlpPath, ['--version'], { encoding: 'utf8', windowsHide: true }).trim();
     execFileSync(path.join(bin, 'ffmpeg.exe'), ['-version'], { windowsHide: true, stdio: 'pipe' });
     console.log(`\nInstalled successfully. yt-dlp: ${version}\nExtension ID: ${id}\nVideos: ${config.downloadDir}`);
-    console.log(`\nNext: open chrome://extensions, enable Developer mode, click Load unpacked, and select:\n${path.join(root, 'extension')}`);
-    console.log('\nKeep this project folder in place while using the unpacked extension.');
+    console.log(`\nExtension folder:\n${extensionPath}\n\nSetup guide:\n${guidePath}`);
+    console.log('\nFinish in Chrome: Developer mode > Load unpacked > select the extension folder above.');
+    console.log('All files are installed locally. The original project folder is no longer needed for running VidRush.');
+    if (!process.argv.includes('--no-open')) openGuide(guidePath);
   } finally {
     const relative = path.relative(os.tmpdir(), stage);
     if (!relative.startsWith('..') && !path.isAbsolute(relative) && path.basename(stage).startsWith('vidrush-install-')) {
