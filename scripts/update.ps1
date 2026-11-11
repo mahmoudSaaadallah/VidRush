@@ -19,7 +19,7 @@ try {
     foreach ($directory in @('host', 'extension')) {
         $sourceRoot = [IO.Path]::GetFullPath((Join-Path $projectRoot $directory)).TrimEnd('\')
         foreach ($file in (Get-ChildItem -LiteralPath $sourceRoot -Recurse -File)) {
-            if ($file.Extension -notin @('.cjs', '.ps1', '.js', '.json', '.html', '.css', '.png')) { continue }
+            if ($file.Extension -notin @('.cjs', '.ps1', '.js', '.json', '.html', '.css', '.png', '.svg')) { continue }
             $relative = $file.FullName.Substring($sourceRoot.Length + 1)
             $target = [IO.Path]::GetFullPath((Join-Path (Join-Path $installRoot $directory) $relative))
             if (-not $target.StartsWith($installRoot + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Unexpected update path.' }
