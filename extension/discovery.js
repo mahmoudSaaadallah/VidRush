@@ -8,7 +8,7 @@ function discoverPageMedia() {
   const videos = [...document.querySelectorAll('video')].slice(0, 30);
   const hasDrm = videos.some(video => !!video.mediaKeys);
   const hasBlob = videos.some(video => (video.currentSrc || video.src || '').startsWith('blob:'));
-  const players = /^(?:player\.hotmart\.com|fast\.wistia\.(?:com|net)|player\.vimeo\.com|www\.youtube(?:-nocookie)?\.com)$/;
+  const embeds = [];
   function add(value, mediaElement = false) {
     if (typeof value !== 'string' || !value || value.length > 8192 || sources.size >= 20) return;
     let url;
@@ -33,11 +33,11 @@ function discoverPageMedia() {
   for (const iframe of [...document.querySelectorAll('iframe[src]')].slice(0, 100)) {
     let url;
     try { url = new URL(iframe.src); } catch { continue; }
-    if (url.protocol !== 'https:' || !players.test(url.hostname) || url.username || url.password) continue;
-    playerOrigins.add(url.origin + '/*');
-    // Hotmart's iframe URL is not itself supported by upstream yt-dlp. Its
-    // authorized frame must be scanned after playback starts instead.
-    if (!hasDrm && url.hostname !== 'player.hotmart.com') add(url.href, true);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) continue;
+    const box = iframe.getBoundingClientRect();
+    if (box.width < 100 || box.height < 80) continue;
+    if (url.origin !== page.origin) playerOrigins.add(url.origin + '/*');
+    embeds.push({ url: url.href, referer: url.origin === page.origin ? page.href.split('#')[0] : page.origin + '/', area: box.width * box.height });
   }
   if (!hasDrm) {
     for (const element of [...document.querySelectorAll('[class*="wistia_async_"],[data-wistia-id],[data-wistiaid],wistia-player[media-id]')].slice(0, 30)) {
@@ -47,5 +47,6 @@ function discoverPageMedia() {
   }
   const rank = value => /\.m3u8(?:$|[?#])/i.test(value) ? (/master/i.test(value) ? 0 : 1) : /\.mpd(?:$|[?#])/i.test(value) ? 2 : /\.(mp4|webm|mov|m4v)(?:$|[?#])/i.test(value) ? 3 : 4;
   return { pageUrl: page.href, title: document.title.slice(0, 300), hasDrm, hasBlob,
-    sources: [...sources.values()].sort((a, b) => rank(a.url) - rank(b.url)).slice(0, 8), playerOrigins: [...playerOrigins].slice(0, 4) };
+    sources: [...sources.values()].sort((a, b) => rank(a.url) - rank(b.url)).slice(0, 8),
+    embeds: embeds.sort((a, b) => b.area - a.area).slice(0, 4), playerOrigins: [...playerOrigins].slice(0, 12) };
 }
