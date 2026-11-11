@@ -6,12 +6,19 @@ let nextId = 0;
 const pending = new Map();
 const analyses = new Map();
 let jobs = [];
-const ready = chrome.storage.session.get('jobs').then(result => {
+let destination = { downloadDir: '', choosingFolder: false };
+let destinationEpoch = 0;
+const ready = chrome.storage.session.get(['jobs', 'destination']).then(result => {
+  destination = { ...destination, ...result.destination, choosingFolder: false };
   jobs = (result.jobs || []).map(job => ['downloading', 'processing'].includes(job.status)
     ? { ...job, status: 'failed', error: 'The browser or companion restarted. Analyze the video and retry.' } : job);
 });
 
 function saveJobs() { return chrome.storage.session.set({ jobs: jobs.slice(-30) }); }
+function saveDestination(value) {
+  destination = { ...destination, ...value };
+  return chrome.storage.session.set({ destination });
+}
 
 function connect() {
   if (nativePort) return nativePort;
@@ -39,6 +46,8 @@ function connect() {
     const error = new Error(`تعذّر الاتصال بالبرنامج المساعد. شغّل Install.cmd ثم أعد المحاولة.${detail ? ` (${detail})` : ''}`);
     for (const request of pending.values()) { clearTimeout(request.timer); request.reject(error); }
     pending.clear();
+    destinationEpoch++;
+    void saveDestination({ choosingFolder: false });
     jobs = jobs.map(job => ['downloading', 'processing'].includes(job.status)
       ? { ...job, status: 'failed', error: 'The companion disconnected. Analyze the video and retry.' } : job);
     void saveJobs();
@@ -50,7 +59,7 @@ function request(action, data = {}, timeout = 100000) {
   return new Promise((resolve, reject) => {
     const id = String(++nextId);
     const port = connect();
-    const timer = setTimeout(() => { pending.delete(id); reject(new Error('انتهت مهلة الطلب. أعد المحاولة.')); }, timeout);
+    const timer = timeout ? setTimeout(() => { pending.delete(id); reject(new Error('انتهت مهلة الطلب. أعد المحاولة.')); }, timeout) : null;
     pending.set(id, { resolve, reject, timer });
     try { port.postMessage({ ...data, id, action }); }
     catch (error) { clearTimeout(timer); pending.delete(id); reject(error); }
@@ -60,7 +69,9 @@ function request(action, data = {}, timeout = 100000) {
 async function handle(message) {
   await ready;
   if (message.action === 'bootstrap') {
+    const epoch = destinationEpoch;
     const companion = await request('ping', {}, 20000);
+    if (epoch === destinationEpoch) await saveDestination({ downloadDir: companion.downloadDir, choosingFolder: !!companion.choosingFolder });
     const current = await request('status');
     for (const job of current) {
       const index = jobs.findIndex(item => item.id === job.id);
@@ -68,7 +79,7 @@ async function handle(message) {
       else jobs.push(job);
     }
     await saveJobs();
-    return { companion, jobs };
+    return { companion: { ...companion, ...destination }, jobs };
   }
   if (message.action === 'analyze') {
     if (!Number.isInteger(message.tabId)) throw new Error('افتح صفحة الفيديو أولًا.');
@@ -92,7 +103,18 @@ async function handle(message) {
     return job;
   }
   if (message.action === 'cancel') return request('cancel', { jobId: message.jobId });
-  if (message.action === 'openFolder') return request('openFolder');
+  if (message.action === 'chooseFolder') {
+    if (destination.choosingFolder) throw new Error('اختيار المجلد مفتوح بالفعل. أكمل الاختيار أو ألغِه.');
+    destinationEpoch++;
+    await saveDestination({ choosingFolder: true });
+    try {
+      const result = await request('chooseFolder', {}, 0);
+      destinationEpoch++;
+      await saveDestination({ downloadDir: result.downloadDir, choosingFolder: false });
+      return result;
+    } finally { await saveDestination({ choosingFolder: false }); }
+  }
+  if (message.action === 'openFolder') return request('openFolder', { jobId: message.jobId });
   throw new Error('Unknown extension action.');
 }
 

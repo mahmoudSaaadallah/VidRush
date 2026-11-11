@@ -6,9 +6,10 @@ const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { createInterface } = require('node:readline');
 const { validateUrl, buildMedia, publicMedia, baseArgs, downloadArgs } = require('./media.cjs');
+const { selectFolder, saveDownloadDirectory } = require('./folders.cjs');
 
 class Companion {
-  constructor(config, emit, spawnProcess = spawn) {
+  constructor(config, emit, spawnProcess = spawn, options = {}) {
     this.config = config;
     this.emit = emit;
     this.spawn = spawnProcess;
@@ -16,6 +17,9 @@ class Companion {
     this.jobs = new Map();
     this.children = new Set();
     this.inspections = 0;
+    this.choosingFolder = false;
+    this.configPath = options.configPath;
+    this.pickFolder = options.selectFolder || selectFolder;
   }
 
   run(args, { timeout = 90000, onLine } = {}) {
@@ -63,7 +67,18 @@ class Companion {
       let data;
       if (action === 'ping') {
         const version = (await this.run(['--version'], { timeout: 15000 })).trim();
-        data = { version, ffmpeg: !!this.config.ffmpegPath, downloadDir: this.config.downloadDir };
+        data = { version, ffmpeg: !!this.config.ffmpegPath, downloadDir: this.config.downloadDir, choosingFolder: this.choosingFolder };
+      } else if (action === 'chooseFolder') {
+        if (this.choosingFolder) throw new Error('A folder picker is already open. Finish or cancel it first.');
+        this.choosingFolder = true;
+        try {
+          const selected = await this.pickFolder(this.config.downloadDir, {
+            spawnProcess: this.spawn,
+            onStart: child => this.children.add(child), onEnd: child => this.children.delete(child),
+          });
+          if (selected !== null) this.config = saveDownloadDirectory(this.configPath, this.config, selected);
+          data = { downloadDir: this.config.downloadDir, cancelled: selected === null, choosingFolder: false };
+        } finally { this.choosingFolder = false; }
       } else if (action === 'inspect') {
         if (this.inspections >= 2) throw new Error('Video analysis is already running. Wait a moment and retry.');
         const url = validateUrl(message.url);
@@ -83,7 +98,7 @@ class Companion {
           throw new Error('Two downloads are already running. Wait for one to finish.');
         }
         fs.mkdirSync(this.config.downloadDir, { recursive: true });
-        const job = { id: randomUUID(), title: media.title, quality: choice.label, status: 'downloading', percent: 0, createdAt: Date.now() };
+        const job = { id: randomUUID(), title: media.title, quality: choice.label, downloadDir: this.config.downloadDir, status: 'downloading', percent: 0, createdAt: Date.now() };
         this.jobs.set(job.id, job);
         while (this.jobs.size > 30) {
           const old = [...this.jobs.values()].find(item => !['downloading', 'processing'].includes(item.status));
@@ -104,8 +119,11 @@ class Companion {
       } else if (action === 'status') {
         data = [...this.jobs.values()].map(job => this.publicJob(job));
       } else if (action === 'openFolder') {
-        fs.mkdirSync(this.config.downloadDir, { recursive: true });
-        const explorer = this.spawn('explorer.exe', [this.config.downloadDir], { detached: true, windowsHide: true, stdio: 'ignore' });
+        const job = message.jobId ? this.jobs.get(message.jobId) : null;
+        if (message.jobId && !job) throw new Error('Download not found.');
+        const directory = job?.downloadDir || this.config.downloadDir;
+        fs.mkdirSync(directory, { recursive: true });
+        const explorer = this.spawn('explorer.exe', [directory], { detached: true, windowsHide: true, stdio: 'ignore' });
         explorer.on('error', () => {});
         explorer.unref();
         data = { opened: true };
@@ -124,6 +142,7 @@ class Companion {
   update(job) { this.emit({ event: 'job', job: this.publicJob(job) }); }
 
   startJob(job, url, choice) {
+    job.downloadDir ||= this.config.downloadDir;
     const onLine = line => {
       if (!['downloading', 'processing'].includes(job.status)) return;
       if (line.startsWith('VIDRUSH_PROGRESS:')) {
@@ -139,12 +158,12 @@ class Companion {
       } else if (line.startsWith('VIDRUSH_FILE:')) {
         try {
           const outputPath = path.resolve(JSON.parse(line.slice('VIDRUSH_FILE:'.length)));
-          const relative = path.relative(path.resolve(this.config.downloadDir), outputPath);
+          const relative = path.relative(path.resolve(job.downloadDir), outputPath);
           if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) job.filename = path.basename(outputPath);
         } catch { /* Completion still works if the extractor omits the filename. */ }
       }
     };
-    const task = this.run(downloadArgs(this.config, url, choice), { timeout: 0, onLine });
+    const task = this.run(downloadArgs({ ...this.config, downloadDir: job.downloadDir }, url, choice), { timeout: 0, onLine });
     job.child = onLine.child;
     task.then(() => {
       if (job.status === 'cancelled') return;

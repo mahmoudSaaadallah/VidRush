@@ -6,6 +6,7 @@ const http = require('node:http');
 const { spawn, execFileSync } = require('node:child_process');
 const { encode, createDecoder } = require('../host/protocol.cjs');
 const assert = require('node:assert/strict');
+const { Companion } = require('../host/companion.cjs');
 const root = path.resolve(__dirname, '..');
 
 async function main() {
@@ -20,7 +21,18 @@ async function main() {
   try {
     fs.cpSync(path.join(root, 'host'), path.join(fixture, 'host'), { recursive: true });
     config.downloadDir = path.join(fixture, 'downloads');
-    fs.writeFileSync(path.join(fixture, 'config.json'), JSON.stringify(config));
+    const testConfig = path.join(fixture, 'config.json');
+    fs.writeFileSync(testConfig, JSON.stringify(config));
+    const selectedDirectory = path.join(fixture, 'chosen مجلد with spaces');
+    fs.mkdirSync(selectedDirectory);
+    let selection;
+    const chooser = new Companion(config, result => { selection = result; }, undefined, {
+      configPath: testConfig, selectFolder: async () => selectedDirectory,
+    });
+    await chooser.handle({ id: 'selection', action: 'chooseFolder' });
+    assert.equal(selection.ok, true);
+    assert.equal(JSON.parse(fs.readFileSync(testConfig, 'utf8')).downloadDir, selectedDirectory);
+    config.downloadDir = selectedDirectory;
     const video = path.join(fixture, 'sample.mp4');
     execFileSync(path.join(config.ffmpegPath, 'ffmpeg.exe'), ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=640x360:r=25', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=44100', '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-movflags', '+faststart', video], { windowsHide: true });
     execFileSync(path.join(config.ffmpegPath, 'ffmpeg.exe'), ['-hide_banner', '-loglevel', 'error', '-i', video,
@@ -64,6 +76,7 @@ async function main() {
     });
     const ping = await request('ping');
     assert.ok(ping.version);
+    assert.equal(ping.downloadDir, selectedDirectory);
     const media = await request('inspect', { url });
     assert.ok(media.options.length);
     const job = await request('download', { token: media.token, choice: media.options[0].id });
@@ -107,6 +120,7 @@ async function main() {
     assert.equal(deniedExit, 1);
     assert.match(deniedError, /Unauthorized/);
     console.log('Untrusted native caller was rejected.');
+    console.log('A selected Unicode folder persisted across companion restart and received the actual downloads.');
   } finally {
     for (const request of pending.values()) clearTimeout(request.timer);
     if (child && child.exitCode === null) {

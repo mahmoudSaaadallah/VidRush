@@ -5,6 +5,18 @@ let activeTab;
 let media;
 let analyzing = false;
 let connected = false;
+let destination = { downloadDir: '', choosingFolder: false };
+
+function renderDestination(value) {
+  destination = { ...destination, ...value };
+  $('destination-path').value = destination.downloadDir || '';
+  $('destination-path').title = destination.downloadDir || '';
+  $('folder').title = destination.downloadDir || '';
+  $('choose-folder').disabled = !connected || destination.choosingFolder;
+  $('choose-folder').textContent = destination.choosingFolder ? 'اختيار المجلد مفتوح…' : 'اختيار المجلد';
+  $('destination').setAttribute('aria-busy', String(destination.choosingFolder));
+  $('download').disabled = !connected || !media || destination.choosingFolder;
+}
 
 async function call(action, data = {}) {
   const response = await chrome.runtime.sendMessage({ action, ...data });
@@ -37,6 +49,15 @@ function renderJobs(jobs) {
     if (job.status === 'downloading' && job.speed) detail += ` · ${bytes(job.speed)}/s`;
     item.querySelector('.job-status').textContent = detail;
     item.querySelector('progress').value = job.percent || 0;
+    const location = item.querySelector('.job-destination');
+    location.textContent = job.downloadDir || '';
+    location.title = job.downloadDir || '';
+    const openJob = item.querySelector('.open-job');
+    openJob.hidden = job.status !== 'completed';
+    openJob.addEventListener('click', async () => {
+      try { await call('openFolder', { jobId: job.id }); }
+      catch (error) { notice(error.message, 'error'); }
+    });
     const cancel = item.querySelector('.cancel');
     cancel.hidden = !['downloading', 'processing'].includes(job.status);
     cancel.addEventListener('click', async () => {
@@ -61,6 +82,7 @@ async function analyze(refresh = false) {
   analyzing = true;
   media = null;
   $('video').hidden = true;
+  document.body.classList.remove('has-video');
   $('refresh').disabled = true;
   notice('جارٍ فحص الفيديو والجودات المتاحة…');
   try {
@@ -76,9 +98,10 @@ async function analyze(refresh = false) {
       $('quality').append(option);
     }
     $('video').hidden = false;
+    document.body.classList.add('has-video');
     notice('');
   } catch (error) { notice(error.message, 'error'); }
-  finally { analyzing = false; $('refresh').disabled = !connected; }
+  finally { analyzing = false; $('refresh').disabled = !connected; renderDestination(destination); }
 }
 
 async function initialize() {
@@ -93,16 +116,19 @@ async function initialize() {
     $('refresh').disabled = false;
     $('setup').hidden = true;
     $('version').textContent = `yt-dlp ${companion.version}`;
-    $('folder').title = companion.downloadDir;
+    renderDestination({ downloadDir: companion.downloadDir, choosingFolder: !!companion.choosingFolder });
     renderJobs(jobs);
     await analyze();
   } catch (error) {
     connected = false;
+    $('video').hidden = true;
+    document.body.classList.remove('has-video');
     $('connection').textContent = 'غير متصل';
     $('connection').classList.remove('connected');
     $('folder').disabled = true;
     $('refresh').disabled = true;
     $('setup').hidden = false;
+    renderDestination({ choosingFolder: false });
     notice(error.message, 'error');
   } finally { $('reconnect').disabled = false; }
 }
@@ -114,6 +140,15 @@ $('refresh').addEventListener('click', () => void analyze(true));
 $('folder').addEventListener('click', async () => {
   try { await call('openFolder'); } catch (error) { notice(error.message, 'error'); }
 });
+$('choose-folder').addEventListener('click', async () => {
+  renderDestination({ choosingFolder: true });
+  notice('اختار مكان الحفظ من نافذة Windows. بعد الاختيار تقدر تفتح الإضافة مجددًا.');
+  try {
+    const result = await call('chooseFolder');
+    renderDestination(result);
+    notice(result.cancelled ? 'لم يتغيّر مجلد الحفظ.' : 'تم حفظ المجلد. الفيديوهات الجديدة هتتحفظ فيه مباشرة.', result.cancelled ? '' : 'success');
+  } catch (error) { renderDestination({ choosingFolder: false }); notice(error.message, 'error'); }
+});
 $('download').addEventListener('click', async () => {
   if (!media) return;
   $('download').disabled = true;
@@ -121,10 +156,11 @@ $('download').addEventListener('click', async () => {
     await call('download', { token: media.token, choice: $('quality').value });
     notice('بدأ التحميل. تقدر تقفل النافذة، وسيكمل طالما Chrome مفتوح.', 'success');
   } catch (error) { notice(error.message, 'error'); }
-  finally { $('download').disabled = false; }
+  finally { renderDestination(destination); }
 });
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'session' && changes.jobs) renderJobs(changes.jobs.newValue || []);
+  if (area === 'session' && changes.destination) renderDestination(changes.destination.newValue || {});
 });
 (async () => {
   const stored = await chrome.storage.session.get('jobs');

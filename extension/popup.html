@@ -37,6 +37,11 @@
       <label for="quality">جودة التحميل</label>
       <select id="quality"></select>
       <p id="format-note" class="meta">الصوت مضمّن. الأحجام المعروضة تقديرية.</p>
+      <div class="destination" id="destination">
+        <div class="destination-heading"><label for="destination-path">مكان الحفظ</label><button id="choose-folder" class="text-button" disabled>اختيار المجلد</button></div>
+        <input id="destination-path" readonly dir="ltr" aria-describedby="destination-hint">
+        <p id="destination-hint" class="meta">اختار المجلد في نافذة Windows، ثم افتح الإضافة مجددًا لو اتقفلت.</p>
+      </div>
       <button id="download" class="primary"><span>تحميل الفيديو</span><span aria-hidden="true">↓</span></button>
     </section>
 
@@ -52,6 +57,7 @@
       <div class="job-top"><strong class="job-title" dir="auto"></strong><button class="cancel text-button">إلغاء</button></div>
       <div class="job-detail"><span class="job-quality" dir="ltr"></span><span class="job-status"></span></div>
       <progress max="100" value="0" aria-label="تقدّم التحميل"></progress>
+      <div class="job-location"><span class="job-destination" dir="ltr"></span><button class="open-job text-button" hidden>فتح المجلد ↗</button></div>
       <p class="job-error" dir="auto" hidden></p>
     </article>
   </template>
