@@ -11,8 +11,10 @@ function escapeHtml(value) {
 function installExtension(sourceRoot, destination, downloadDir) {
   const source = path.join(sourceRoot, 'extension');
   const extensionPath = path.join(destination, 'extension');
+  fs.mkdirSync(destination, { recursive: true });
   if (path.resolve(source).toLowerCase() !== path.resolve(extensionPath).toLowerCase()) {
-    fs.cpSync(source, extensionPath, { recursive: true });
+    // Use JavaScript traversal for consistent Unicode-path copying on Windows/Node 22.
+    fs.cpSync(source, extensionPath, { recursive: true, filter: () => true });
   }
   const template = fs.readFileSync(path.join(sourceRoot, 'scripts', 'setup-guide.html'), 'utf8');
   const html = template.replaceAll('{{EXTENSION_PATH}}', escapeHtml(extensionPath))

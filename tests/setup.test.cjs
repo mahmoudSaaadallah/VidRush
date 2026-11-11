@@ -15,8 +15,10 @@ test('setup installs a complete extension and a guide with escaped, permanent pa
   const paths = installExtension(path.resolve(__dirname, '..'), destination, 'D:\\Videos & clips');
   const manifest = JSON.parse(fs.readFileSync(path.join(paths.extensionPath, 'manifest.json'), 'utf8'));
   assert.equal(manifest.key, require('../extension/manifest.json').key);
-  for (const file of ['popup.html', 'background.js', 'popup.css', 'popup.js', 'icons/128.png']) {
-    assert.ok(fs.existsSync(path.join(paths.extensionPath, file)), file);
+  const source = path.resolve(__dirname, '..', 'extension');
+  for (const file of fs.readdirSync(source, { recursive: true })) {
+    if (!fs.statSync(path.join(source, file)).isFile()) continue;
+    assert.deepEqual(fs.readFileSync(path.join(paths.extensionPath, file)), fs.readFileSync(path.join(source, file)), file);
   }
   const guide = fs.readFileSync(paths.guidePath, 'utf8');
   assert.ok(guide.includes(escapeHtml(paths.extensionPath)));
