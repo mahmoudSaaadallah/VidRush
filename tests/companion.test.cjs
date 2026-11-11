@@ -10,6 +10,38 @@ const { Companion } = require('../host/companion.cjs');
 const { buildMedia } = require('../host/media.cjs');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
+test('a single embedded video keeps its referrer for download without exposing private source URLs', async t => {
+  const h = harness(); t.after(h.cleanup);
+  const url = 'https://cdn.test/master.m3u8?token=secret';
+  const referer = 'https://player.hotmart.com/';
+  const inspect = h.companion.handle({ id: 'inspect', action: 'inspect', url, referer, title: 'Lesson title' });
+  assert.equal(h.calls[0].args[h.calls[0].args.indexOf('--referer') + 1], referer);
+  h.calls[0].child.stdout.write(JSON.stringify({ _type: 'playlist', entries: [{ title: 'master', formats: [{ format_id: '1', url, ext: 'mp4', height: 720 }] }] }));
+  h.calls[0].child.emit('close', 0); await inspect;
+  const media = h.events.at(-1).data;
+  assert.equal(media.title, 'Lesson title');
+  assert.equal(media.url, undefined); assert.equal(media.referer, undefined);
+  await h.companion.handle({ id: 'download', action: 'download', token: media.token, choice: media.options[0].id, referer: 'https://untrusted.test/' });
+  const download = h.calls.at(-1);
+  assert.equal(download.args[download.args.indexOf('--referer') + 1], referer);
+  assert.equal(download.args.at(-1), url);
+  assert.equal(JSON.stringify(h.events).includes('token=secret'), false);
+  download.child.stderr.write('HTTP 403: ' + url); download.child.emit('close', 1); await tick();
+  assert.match(h.events.at(-1).job.error, /redacted/);
+  assert.equal(h.events.at(-1).job.error.includes('token=secret'), false);
+});
+
+test('invalid referrers are rejected and real multi-video playlists remain unsupported', async t => {
+  const h = harness(); t.after(h.cleanup);
+  await h.companion.handle({ id: 'bad', action: 'inspect', url: 'https://cdn.test/video.mp4', referer: 'https://example.test/\r\nCookie: injected' });
+  assert.equal(h.calls.length, 0);
+  const operation = h.companion.handle({ id: 'playlist', action: 'inspect', url: 'https://example.test/course' });
+  h.calls[0].child.stdout.write(JSON.stringify({ _type: 'playlist', entries: [{ formats: [] }, { formats: [] }] }));
+  h.calls[0].child.emit('close', 0); await operation;
+  assert.equal(h.events.at(-1).ok, false);
+  assert.match(h.events.at(-1).error, /individual video/);
+});
+
 function harness(options = {}) {
   const events = [], calls = [];
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vidrush-test-'));

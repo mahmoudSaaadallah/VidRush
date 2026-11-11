@@ -64,7 +64,20 @@ function baseArgs(config) {
     '--socket-timeout', '20', '--retries', '3', '--js-runtimes', `node:${config.nodePath || process.execPath}`];
 }
 
-function downloadArgs(config, url, choice) {
+function refererArgs(value) {
+  if (value === undefined) return [];
+  if (typeof value !== 'string' || /[\r\n]/.test(value)) throw new Error('Invalid video referrer.');
+  return ['--referer', validateUrl(value)];
+}
+
+function safeError(value) {
+  return String(value).replace(/https?:\/\/[^\s<>"']+/g, raw => {
+    try { const url = new URL(raw); return url.origin + url.pathname + (url.search ? '?[redacted]' : ''); }
+    catch { return '[video URL]'; }
+  });
+}
+
+function downloadArgs(config, url, choice, referer) {
   const args = [...baseArgs(config), '--newline', '--progress', '--progress-delta', '0.5',
     '--progress-template', 'download:VIDRUSH_PROGRESS:%(progress)j',
     '--print', 'after_move:VIDRUSH_FILE:%(filepath)j', '--no-simulate',
@@ -73,8 +86,8 @@ function downloadArgs(config, url, choice) {
     '--format', choice.selector];
   if (config.ffmpegPath) args.push('--ffmpeg-location', config.ffmpegPath);
   if (choice.needsMerge) args.push('--merge-output-format', choice.container);
-  args.push('--', validateUrl(url));
+  args.push(...refererArgs(referer), '--', validateUrl(url));
   return args;
 }
 
-module.exports = { validateUrl, buildMedia, publicMedia, baseArgs, downloadArgs };
+module.exports = { validateUrl, buildMedia, publicMedia, baseArgs, downloadArgs, refererArgs, safeError };

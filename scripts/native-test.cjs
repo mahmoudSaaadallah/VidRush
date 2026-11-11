@@ -42,6 +42,7 @@ async function main() {
     server = http.createServer((req, res) => {
       const name = req.url.slice(1);
       if (!/^(sample\.mp4|manifest\.mpd|(?:init|chunk)-stream[\w.-]+\.m4s)$/.test(name)) { res.writeHead(404); res.end(); return; }
+      if (name !== 'sample.mp4' && req.headers.referer !== `http://127.0.0.1:${server.address().port}/lesson`) { res.writeHead(403); res.end('Video referrer required'); return; }
       const file = path.join(fixture, name);
       if (!fs.existsSync(file)) { res.writeHead(404); res.end(); return; }
       const body = fs.readFileSync(file);
@@ -92,7 +93,9 @@ async function main() {
     assert.equal(files.length, 1);
     assert.deepEqual(fs.readFileSync(path.join(config.downloadDir, files[0])), payload);
     assert.ok(events.some(event => event.job?.percent > 0));
-    const dash = await request('inspect', { url: `http://127.0.0.1:${server.address().port}/manifest.mpd` });
+    assert.equal(ping.capabilities.pageSources, true);
+    const dash = await request('inspect', { url: `http://127.0.0.1:${server.address().port}/manifest.mpd`, referer: `http://127.0.0.1:${server.address().port}/lesson`, title: 'Authorized embedded lesson' });
+    assert.equal(dash.title, 'Authorized embedded lesson');
     assert.ok(dash.options.some(option => option.height === 360));
     const lowQuality = dash.options.find(option => option.height === 180);
     assert.ok(lowQuality, 'The lower resolution must be selectable.');
@@ -109,7 +112,7 @@ async function main() {
     const probe = JSON.parse(execFileSync(path.join(config.ffmpegPath, 'ffprobe.exe'), ['-v', 'quiet', '-show_streams', '-of', 'json', mergedFile], { encoding: 'utf8', windowsHide: true }));
     assert.equal(probe.streams.find(stream => stream.codec_type === 'video').height, 180);
     assert.ok(probe.streams.some(stream => stream.codec_type === 'audio'));
-    console.log('Real DASH download selected 180p from two qualities and merged separate audio successfully.');
+    console.log('Real DASH download required the saved referrer for manifest and segments, selected 180p, and merged separate audio successfully.');
     await assert.rejects(request('inspect', { url: 'file:///C:/private' }), /HTTP|URL/);
     console.log(`Real yt-dlp ${ping.version}: native ping, analysis, quality selection, progress, downloaded bytes, and invalid URL handling passed.`);
     // Ensure a direct invocation from a different extension origin is rejected too.
