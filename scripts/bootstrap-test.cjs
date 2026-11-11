@@ -10,7 +10,12 @@ function main() {
   const root = path.resolve(__dirname, '..');
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'vidrush-bootstrap-test-'));
   try {
-    const environment = { ...process.env, LOCALAPPDATA: path.join(fixture, 'AppData اسم with spaces') };
+    // GitHub's Windows image exposes both system curl and Git's curl on PATH.
+    // Reproduce that environment locally as well; setup must pick one executable.
+    const additionalTools = path.join(fixture, 'additional-tools');
+    fs.mkdirSync(additionalTools);
+    fs.copyFileSync(path.join(process.env.SystemRoot, 'System32', 'curl.exe'), path.join(additionalTools, 'curl.exe'));
+    const environment = { ...process.env, LOCALAPPDATA: path.join(fixture, 'AppData اسم with spaces'), PATH: `${process.env.PATH};${additionalTools}` };
     const command = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'scripts', 'bootstrap.ps1'), '-PrepareOnly', '-ForcePortableRuntime', '-NoOpen'];
     const options = { env: environment, encoding: 'utf8', windowsHide: true, timeout: 900000, maxBuffer: 2 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] };
     const output = execFileSync('powershell.exe', command, options);
