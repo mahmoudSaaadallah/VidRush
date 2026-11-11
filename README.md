@@ -10,6 +10,15 @@ VidRush consists of a Chrome extension and a local companion powered by [yt-dlp]
 
 *Example interface with illustrative video details and file sizes.*
 
+## Quick start — no programming knowledge needed
+
+1. Download this project using GitHub's **Code → Download ZIP** button, then **Extract All**. Do not run setup from inside the ZIP.
+2. Open the extracted folder and double-click **`Install.cmd`**. Wait while it prepares everything; no terminal commands or manual Node.js installation are needed.
+3. Chrome opens a setup guide and the Extensions page. Follow the guide: turn on **Developer mode**, click **Load unpacked**, and select the installed extension folder using the **Copy folder path** button.
+4. Pin VidRush from Chrome's Extensions menu, open a video page, and click VidRush to choose a quality and download.
+
+**One file prepares all downloading tools. Chrome activation still needs your clicks once.** Chrome does not allow this unpublished extension to be silently enabled by a normal Windows installer. See [Chrome's installation rules](https://developer.chrome.com/docs/extensions/how-to/distribute/install-extensions). VidRush does not modify browser policies or profile settings to work around that restriction.
+
 ## What you can do
 
 - Analyze the video page currently open in Chrome.
@@ -24,48 +33,26 @@ VidRush consists of a Chrome extension and a local companion powered by [yt-dlp]
 | --- | --- |
 | Operating system | Windows 10 or 11, 64-bit x64 or ARM64 |
 | Browser | Google Chrome 120 or newer; use a current version |
-| Node.js | Version **22 or newer**, installed before setup; choose the LTS installer from [nodejs.org](https://nodejs.org/) |
 | Internet | Required for setup, video analysis, and downloading |
 | Disk space | Allow about 1 GB for setup and temporary extraction, plus space for your videos |
 
-You do **not** need Python, a paid account, a server, or administrator privileges. Setup downloads yt-dlp and FFmpeg automatically and copies your existing Node.js executable into the companion folder.
+You do **not** need Node.js, Python, npm, Git, a paid account, a server, or administrator privileges to install VidRush. `Install.cmd` reuses a compatible Node.js runtime if available, or downloads a private Node.js LTS runtime from [nodejs.org](https://nodejs.org/). It then downloads yt-dlp and FFmpeg and verifies SHA-256 hashes. The private runtime does not change your system `PATH` or replace your system Node.js.
+
+Google Chrome itself must be installed. If it is missing, the generated guide includes the official Chrome download link; VidRush does not silently install a different browser.
 
 ## Install: step by step
 
 ### 1. Get the project
 
-Download and extract this repository's ZIP, or clone it using Git:
+On this repository's GitHub page, click **Code → Download ZIP**. Right-click the ZIP in Windows and choose **Extract All**, then open the extracted folder. You do not need Git or a terminal.
 
-```powershell
-git clone https://github.com/mahmoudSaaadallah/VidRush.git
-cd VidRush
-```
-
-Keep the extracted/cloned folder in a permanent location. Chrome loads the extension directly from its `extension` subfolder, so moving or deleting that folder breaks the extension.
-
-### 2. Install Node.js
-
-If Node.js 22 or newer is already installed, skip this step.
-
-1. Download the **LTS** Windows installer from [nodejs.org](https://nodejs.org/).
-2. Install it with the default options, including adding Node.js to `PATH`.
-3. Close and reopen your terminal or File Explorer window if Node.js is not detected.
-
-To check the version from PowerShell:
-
-```powershell
-node --version
-```
-
-The result must be `v22.x.x` or newer.
-
-### 3. Install the companion
+### 2. Run the installer
 
 1. Close Chrome, particularly before reinstalling or updating VidRush.
 2. In the project folder, double-click **`Install.cmd`**.
-3. Wait for yt-dlp and FFmpeg to download. FFmpeg is a large download; extraction can take a minute.
+3. Wait for the runtime, yt-dlp, and FFmpeg to download. FFmpeg is a large download; extraction can take a minute. The installer prints progress and checks each downloaded release before using it.
 4. Check that the terminal says **`Installed successfully`**. If it reports an error, setup is incomplete; see [Troubleshooting](#troubleshooting).
-5. Close the installer window.
+5. Follow the setup guide opened in Chrome, then press a key to close the installer window.
 
 You can also run setup from PowerShell in the project folder:
 
@@ -75,15 +62,19 @@ You can also run setup from PowerShell in the project folder:
 
 Do not run this as administrator. Setup registers the companion for your current Windows account.
 
-### 4. Load the Chrome extension
+### 3. Activate the Chrome extension once
 
-1. Open Chrome and enter `chrome://extensions` in the address bar.
+1. Switch to the **Extensions** tab opened by setup. If it is missing, enter `chrome://extensions` in Chrome's address bar.
 2. Turn on **Developer mode** in the top-right corner.
 3. Click **Load unpacked**.
-4. Select the **`extension`** folder inside this project. **Do not select the project root.**
+4. In the setup guide, click **Copy folder path**. In the folder dialog, paste the path into its address bar, press Enter, then click **Select Folder**. This selects the installed folder at `%LOCALAPPDATA%\VidRush\extension`. **Do not select the project folder or ZIP.**
 5. Open Chrome's Extensions menu (the puzzle-piece button) and pin **VidRush** for easy access.
 
 There is no extension ID to copy or paste. A checked-in public key keeps the extension ID stable, and setup registers that ID automatically. The public key is not a secret or a signing credential.
+
+The guide is saved at `%LOCALAPPDATA%\VidRush\setup-guide.html`; double-click it to read the instructions again. The extension and companion are now in a permanent folder, so you can move or delete the original extracted project after activation. Keep or download another project copy when you want to update or uninstall.
+
+**Upgrading from the original project-folder installation?** Remove the old VidRush entry on `chrome://extensions`, then load the permanent folder shown in the new guide. This migration is only needed once.
 
 ## Download your first video
 
@@ -147,14 +138,14 @@ Use VidRush for videos you own or have permission to download.
 1. Finish or cancel active downloads and close Chrome.
 2. Update the project files (`git pull`, or replace the extracted project with a newer copy).
 3. Run **`Install.cmd`** again. This installs current yt-dlp/FFmpeg releases and refreshes the companion and bundled Node.js executable.
-4. Open `chrome://extensions` and click **Reload** on VidRush.
+4. The setup guide opens again. On `chrome://extensions`, click **Reload** on VidRush. If migrating from a project-folder install, remove the old entry and load the permanent folder instead.
 
-Updates are manual. VidRush does not run an update service in the background. To update Node.js itself, install a newer LTS version before rerunning setup.
+Updates are manual. VidRush does not run an update service in the background. Setup reuses a compatible runtime; a missing or unsupported runtime is prepared automatically.
 
 ## Uninstall
 
 1. Close Chrome.
-2. Double-click **`Uninstall.cmd`** in the project folder.
+2. Double-click **`Uninstall.cmd`** in the project folder. If you deleted that folder after installation, download and extract another copy of the project first.
 3. Open `chrome://extensions` and remove **VidRush**.
 4. Delete the project folder if you no longer need it.
 
@@ -166,12 +157,15 @@ If you customized `downloadDir` to point inside the companion installation folde
 
 | Problem | What to do |
 | --- | --- |
-| `node` is not recognized | Install Node.js LTS, reopen the terminal/File Explorer, and rerun `Install.cmd`. |
+| No Node.js or programming tools are installed | That is fine: double-click `Install.cmd`. It downloads a private runtime automatically. Do not start `scripts/install.cjs` directly. |
+| Setup fails to download Node.js | Check internet access to nodejs.org and rerun `Install.cmd`. A verified cached download is reused on retries. |
+| Another setup is already running | Use the existing setup window and wait for it to finish before opening another one. |
 | Installer fails while downloading | Check your connection and access to GitHub. Retry setup. Public GitHub API rate limits can require waiting before retrying. |
 | Checksum verification fails | Do not use the downloaded file. Rerun setup; an upstream release may have changed during installation. |
 | Installer cannot replace a file | Close Chrome and finish any downloads, then rerun setup. A running companion can lock its files. |
 | Extension says the companion is unavailable | Run `Install.cmd` under the same Windows account as Chrome. Click `إعادة الاتصال` (Reconnect) in the popup. Check that `%LOCALAPPDATA%\VidRush\config.json` exists. |
-| Chrome rejects the extension folder | Select the project's `extension` folder containing `manifest.json`, rather than the whole project or a ZIP file. |
+| Chrome rejects the extension folder | Use the setup guide's Copy folder path button to select `%LOCALAPPDATA%\VidRush\extension`, rather than the project or a ZIP file. |
+| Chrome or the setup tabs do not open | Open `%LOCALAPPDATA%\VidRush\setup-guide.html` manually. If Chrome is missing, use the official download link in that guide, then type `chrome://extensions` in Chrome. |
 | No video or qualities found | Open the individual video page and press refresh in VidRush. Update yt-dlp by rerunning setup. The site may be unsupported or require authentication/DRM. |
 | Analysis times out | Retry on the individual video's page. Analysis has a 90-second limit. Check the connection and update the companion. |
 | Download fails with a site error | The original yt-dlp error appears in the download card. Update the companion. Authentication and anti-bot restrictions may still prevent downloading. |
@@ -189,8 +183,11 @@ The companion is installed under **`%LOCALAPPDATA%\VidRush`**, containing:
 ```text
 VidRush/
   bin/                    yt-dlp.exe, ffmpeg.exe, ffprobe.exe
-  runtime/node.exe        copy of your installed Node.js executable
+  runtime/node.exe        private runtime used by the companion
+  setup-runtime/          downloaded Node.js runtime, when needed
   host/                   local companion JavaScript
+  extension/              permanent copy loaded by Chrome
+  setup-guide.html        final activation steps and copyable folder path
   host.cmd                Chrome's launcher
   config.json             local paths and extension ID
   com.vidrush.companion.json
@@ -206,13 +203,13 @@ Verified release downloads are cached in `%LOCALAPPDATA%\VidRush\cache` so a ret
 
 There is no local web server or listening TCP port. Chrome starts the companion using [Native Messaging](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging). The native host manifest and companion both check the extension origin.
 
-The extension requests `activeTab`, `nativeMessaging`, and `storage`. It does not request access to all websites, browser cookies, or your browsing history. It reads the active tab's URL when you open it. The URL is passed to the local companion; yt-dlp then connects to the website/CDN. Setup connects to GitHub to download dependencies and checks SHA-256 hashes before installing them. VidRush has no analytics or remote VidRush backend.
+The extension requests `activeTab`, `nativeMessaging`, and `storage`. It does not request access to all websites, browser cookies, or your browsing history. It reads the active tab's URL when you open it. The URL is passed to the local companion; yt-dlp then connects to the website/CDN. Setup connects to nodejs.org when it needs a runtime and GitHub for yt-dlp/FFmpeg, and checks SHA-256 hashes before using downloaded releases. VidRush has no analytics or remote VidRush backend.
 
 Third-party components retain their own licenses; see [THIRD_PARTY.md](THIRD_PARTY.md).
 
 ## Development and tests
 
-Node.js 22 or newer is required. From the project root:
+For **development only**, install Node.js 22 or newer. End users do not need this step. Clone the repository or extract its ZIP, then run from the project root:
 
 ```powershell
 npm ci
@@ -223,6 +220,14 @@ npm run test:browser
 ```
 
 `npm ci` installs development dependencies only; end users do not need it to run VidRush. The browser tests check the real extension loads and exercise the popup with deterministic companion responses. They do not download third-party videos.
+
+On Windows, test setup without relying on the system Node.js runtime:
+
+```powershell
+npm run test:bootstrap
+```
+
+This downloads and verifies a real portable LTS runtime in an isolated temporary location, exercises verified-cache reuse and corrupt-cache recovery, and does not register a companion or change Chrome. For unattended local setup checks, `Install.cmd -NoOpen` prepares everything without opening browser tabs.
 
 To run an additional end-to-end native test on Windows **after installing the companion**:
 
@@ -235,7 +240,7 @@ This generates an original test video using FFmpeg, serves it on localhost, and 
 To additionally check that Chrome can launch the **registered** native companion:
 
 ```powershell
-npm run test:browser -- --native
+npm run test:browser -- --native --installed
 ```
 
 This optional Windows check uses the installed companion. Keep other Chrome windows closed during this test.
