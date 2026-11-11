@@ -6,8 +6,8 @@ const { spawn } = require('node:child_process');
 
 function selectFolder(currentDir, { spawnProcess = spawn, onStart = () => {}, onEnd = () => {} } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawnProcess('powershell.exe', ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, 'select-folder.ps1')], {
-      windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'],
+    const child = spawnProcess('powershell.exe', ['-NoProfile', '-STA', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, 'select-folder.ps1')], {
+      windowsHide: false, shell: false, stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, VIDRUSH_CURRENT_FOLDER: currentDir },
     });
     onStart(child);

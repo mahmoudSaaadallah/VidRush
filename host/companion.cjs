@@ -7,6 +7,7 @@ const { randomUUID } = require('node:crypto');
 const { createInterface } = require('node:readline');
 const { validateUrl, buildMedia, publicMedia, baseArgs, downloadArgs } = require('./media.cjs');
 const { selectFolder, saveDownloadDirectory } = require('./folders.cjs');
+const { openFolder } = require('./open-folder.cjs');
 
 class Companion {
   constructor(config, emit, spawnProcess = spawn, options = {}) {
@@ -67,7 +68,8 @@ class Companion {
       let data;
       if (action === 'ping') {
         const version = (await this.run(['--version'], { timeout: 15000 })).trim();
-        data = { version, ffmpeg: !!this.config.ffmpegPath, downloadDir: this.config.downloadDir, choosingFolder: this.choosingFolder };
+        data = { version, ffmpeg: !!this.config.ffmpegPath, downloadDir: this.config.downloadDir, choosingFolder: this.choosingFolder,
+          protocolVersion: 2, capabilities: { folderPicker: true, openFolder: true } };
       } else if (action === 'chooseFolder') {
         if (this.choosingFolder) throw new Error('A folder picker is already open. Finish or cancel it first.');
         this.choosingFolder = true;
@@ -120,13 +122,10 @@ class Companion {
         data = [...this.jobs.values()].map(job => this.publicJob(job));
       } else if (action === 'openFolder') {
         const job = message.jobId ? this.jobs.get(message.jobId) : null;
-        if (message.jobId && !job) throw new Error('Download not found.');
-        const directory = job?.downloadDir || this.config.downloadDir;
-        fs.mkdirSync(directory, { recursive: true });
-        const explorer = this.spawn('explorer.exe', [directory], { detached: true, windowsHide: true, stdio: 'ignore' });
-        explorer.on('error', () => {});
-        explorer.unref();
-        data = { opened: true };
+        if (message.jobId && !job && !message.knownDownloadDir) throw new Error('Download not found.');
+        const directory = job?.downloadDir || (message.jobId ? message.knownDownloadDir : this.config.downloadDir);
+        if (!message.jobId) fs.mkdirSync(directory, { recursive: true });
+        data = await openFolder(directory, this.spawn);
       } else throw new Error('Unknown companion action.');
       this.emit({ id, ok: true, data });
     } catch (error) {

@@ -8,6 +8,7 @@ const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
 const { execFileSync } = require('node:child_process');
 const { writableDirectory, saveDownloadDirectory, selectFolder } = require('../host/folders.cjs');
+const { openFolder } = require('../host/open-folder.cjs');
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vidrush-folder-'));
@@ -53,6 +54,8 @@ test('Windows picker receives paths through the environment and decodes UTF-8 ou
   const selected = 'D:\\فيديوهاتي & clips';
   const operation = selectFolder(selected, { spawnProcess: (...args) => { call = args; return child; } });
   assert.equal(call[2].shell, false);
+  assert.equal(call[2].windowsHide, false);
+  assert.ok(call[1].includes('-WindowStyle'));
   assert.equal(call[2].env.VIDRUSH_CURRENT_FOLDER, selected);
   assert.ok(!call[1].includes(selected));
   assert.ok(call[1].includes('-STA'));
@@ -71,4 +74,23 @@ test('cancelling the native picker returns no folder', async () => {
 
 test('Windows picker script loads its native dialog type without opening a window', { skip: process.platform !== 'win32' }, () => {
   execFileSync('powershell.exe', ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, '..', 'host', 'select-folder.ps1'), '-Check'], { windowsHide: true, stdio: 'pipe' });
+});
+
+test('Explorer requests a visible window and reports successful process launch', async t => {
+  const directory = fixture(t);
+  const child = new EventEmitter(); child.unref = () => {};
+  let call;
+  const operation = openFolder(directory, (...args) => { call = args; return child; });
+  assert.equal(call[2].windowsHide, false);
+  assert.equal(call[2].shell, false);
+  assert.deepEqual(call[1], [directory]);
+  child.emit('spawn');
+  assert.equal((await operation).opened, true);
+});
+
+test('Explorer launch errors reach the caller rather than falsely reporting success', async t => {
+  const child = new EventEmitter(); child.unref = () => {};
+  const operation = openFolder(fixture(t), () => child);
+  child.emit('error', new Error('ENOENT'));
+  await assert.rejects(operation, /Could not open Windows Explorer/);
 });
