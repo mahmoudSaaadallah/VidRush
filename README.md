@@ -88,7 +88,7 @@ The guide is saved at `%LOCALAPPDATA%\VidRush\setup-guide.html`; double-click it
 7. Follow the download under **`التحميلات`** (Downloads). You can close the popup; keep Chrome open.
 8. When the status says **`اكتمل التحميل`** (Completed), click **`فتح المجلد`** (Open folder) on that download to open its actual saved location.
 
-The circular-arrow button re-analyzes the current page. Use **`إلغاء`** (Cancel) beside an active download to stop it. Up to **two downloads** can run at once.
+The circular-arrow button reads the active tab's current URL each time you click it. After navigating to another video or changing pages within the same tab, press it to update the displayed site and quality choices. A delayed result from the previous page cannot replace the newer result. Use **`إلغاء`** (Cancel) beside an active download to stop it. Up to **two downloads** can run at once.
 
 ### Where files are saved
 
@@ -139,6 +139,16 @@ Use VidRush for videos you own or have permission to download.
 
 ## Update
 
+**For extension/companion code updates, including folder-button fixes:**
+
+1. Get the latest project files (`git pull`, or download and extract a fresh ZIP).
+2. Double-click **`Update.cmd`**. This copies code only; it does not download tools, replace the runtime, edit your save-folder setting, or stop running downloads.
+3. Wait for active downloads to finish, then open `chrome://extensions` and click **Reload** on VidRush. Reloading closes the old companion; the next popup starts the updated code. If the popup shows an old-helper warning, its **`تفعيل التحديث`** (Activate update) button reloads the extension after checking that no downloads are active.
+
+Merging a pull request or updating the source folder alone does **not** update the installed copy. If the popup says the companion is old, run `Update.cmd` and reload the extension. The folder buttons remain disabled until the companion advertises support, so an outdated helper does not silently accept unavailable actions.
+
+**For first-time installation or updating yt-dlp/FFmpeg/runtime files:**
+
 1. Finish or cancel active downloads and close Chrome.
 2. Update the project files (`git pull`, or replace the extracted project with a newer copy).
 3. Run **`Install.cmd`** again. This installs current yt-dlp/FFmpeg releases and refreshes the companion and bundled Node.js executable.
@@ -176,7 +186,8 @@ If you customized `downloadDir` to point inside the companion installation folde
 | Quality list is old or selection expired | Press the circular-arrow button to analyze the page again. |
 | Popup closes when choosing a folder | Finish or cancel the Windows dialog, then click VidRush again. The background connection retains your selection. |
 | Folder picker is already open | Finish or cancel the existing Windows folder dialog before starting another selection. |
-| Choosing a folder reports an unknown action | Close Chrome, rerun `Install.cmd`, reopen Chrome and reload VidRush. Both the extension and companion must be updated. |
+| Folder buttons are disabled, or the popup says the helper is old | Run `Update.cmd` from the latest project folder, finish active downloads, and activate the update or reload VidRush at `chrome://extensions`. Both installed code copies must be updated; merging alone is insufficient. |
+| Open folder fails | The popup displays the Windows launch error. Check that the folder/drive exists; run `Update.cmd` and reload if using an older companion. |
 | A folder cannot be saved or written to | Choose a writable folder on an available drive, check its permissions and free space, and retry. The previous folder remains selected if saving fails. |
 | Download percentage restarts | Separate audio and video tracks have their own progress. Wait until the final status is Completed. |
 | No download appears in Chrome's manager | This is expected. Use VidRush's Open folder button; the companion saves files directly. |

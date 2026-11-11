@@ -93,3 +93,12 @@ test('folder selection survives popup lifetime and stale bootstrap replies canno
   assert.equal(h.stored.destination.choosingFolder, false);
   assert.equal(result.companion.downloadDir, 'D:\\Chosen videos');
 });
+
+test('opening a historical folder uses session metadata, never a caller-supplied fallback path', async () => {
+  const h = harness([{ id: 'saved', status: 'completed', downloadDir: 'D:\\Saved videos' }]);
+  const opening = h.api.handle({ action: 'openFolder', jobId: 'saved', knownDownloadDir: 'C:\\Untrusted override' });
+  await tick();
+  assert.equal(h.sent[0].knownDownloadDir, 'D:\\Saved videos');
+  h.respond(h.sent[0], { opened: true }); await opening;
+  await assert.rejects(h.api.handle({ action: 'openFolder', jobId: 'missing' }), /غير موجود/);
+});

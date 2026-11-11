@@ -19,7 +19,7 @@ async function main() {
   let server, child;
   const pending = new Map(), events = [];
   try {
-    fs.cpSync(path.join(root, 'host'), path.join(fixture, 'host'), { recursive: true });
+    fs.cpSync(path.join(root, 'host'), path.join(fixture, 'host'), { recursive: true, filter: () => true });
     config.downloadDir = path.join(fixture, 'downloads');
     const testConfig = path.join(fixture, 'config.json');
     fs.writeFileSync(testConfig, JSON.stringify(config));

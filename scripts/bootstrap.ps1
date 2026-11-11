@@ -32,7 +32,7 @@ function Get-Sha256([string]$File) {
 }
 
 function Get-Download([string]$Url, [string]$File) {
-    $curl = Get-Command curl.exe -CommandType Application -ErrorAction SilentlyContinue
+    $curl = Get-Command curl.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($curl) {
         & $curl.Source --fail --location --retry 2 --connect-timeout 20 --max-time 900 --output $File $Url
         if ($LASTEXITCODE -ne 0) { throw 'A required download failed. Check your internet connection and run Install.cmd again.' }

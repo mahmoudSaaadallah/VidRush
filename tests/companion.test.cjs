@@ -26,6 +26,7 @@ function harness(options = {}) {
     child.kill = () => { child.exitCode = 1; child.emit('close', 1); };
     child.unref = () => {};
     calls.push({ executable, args, options, child });
+    if (executable === 'explorer.exe') setImmediate(() => child.emit('spawn'));
     return child;
   }, { configPath, ...options });
   return { companion, events, calls, directory, configPath, cleanup: () => fs.rmSync(directory, { recursive: true, force: true }) };
@@ -131,4 +132,13 @@ test('a second folder picker is rejected while the first remains open', async t 
   assert.match(h.events.at(-1).error, /already open/);
   finish(null); await first;
   assert.equal(h.events.at(-1).data.cancelled, true);
+});
+
+test('completed session folders still open after the companion loses its in-memory job map', async t => {
+  const h = harness(); t.after(h.cleanup);
+  await h.companion.handle({ id: 'old', action: 'openFolder', jobId: 'previous-session', knownDownloadDir: h.directory });
+  assert.equal(h.events.at(-1).ok, true);
+  assert.deepEqual(h.calls[0].args, [h.directory]);
+  await h.companion.handle({ id: 'invalid', action: 'openFolder', jobId: 'previous-session', knownDownloadDir: 'relative/path' });
+  assert.equal(h.events.at(-1).ok, false);
 });
