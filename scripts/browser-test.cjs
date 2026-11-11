@@ -28,7 +28,8 @@ async function main() {
     if (!worker) worker = await context.waitForEvent('serviceworker');
     const id = extensionId(JSON.parse(fs.readFileSync(path.join(extensionPath, 'manifest.json'), 'utf8')).key);
     assert.equal(new URL(worker.url()).host, id);
-    assert.deepEqual(await worker.evaluate(() => chrome.runtime.getManifest().permissions), ['activeTab', 'nativeMessaging', 'storage']);
+    assert.deepEqual(await worker.evaluate(() => chrome.runtime.getManifest().permissions), ['activeTab', 'scripting', 'nativeMessaging', 'storage']);
+    assert.equal(await worker.evaluate(() => chrome.runtime.getManifest().host_permissions), undefined);
     console.log(`Real extension loaded: ${id}`);
     if (process.argv.includes('--native')) {
       const ping = await worker.evaluate(async () => request('ping', {}, 20000));
@@ -82,6 +83,7 @@ async function main() {
               return { ok: true, data: { ...window.destination, cancelled: false } };
             }
             if (message.action === 'analyze') {
+              if (window.testMode === 'player' && !message.scanPlayer) return { ok: false, error: 'شغّل الفيديو ثم افحص المشغّل.', playerOrigins: ['https://player.hotmart.com/*'] };
               if (window.testMode === 'unsupported') return { ok: false, error: 'No downloadable video with audio was found.' };
               const slow = message.url.endsWith('/slow-video');
               if (slow) await new Promise(resolve => { window.releaseSlowAnalysis = resolve; });
@@ -105,6 +107,10 @@ async function main() {
           },
         },
         tabs: { query: async () => [{ ...window.currentTab }] },
+        permissions: { request: async value => {
+          window.requestedOrigins = value.origins;
+          return window.allowPlayer === true;
+        } },
         storage: {
           session: { get: async () => ({ jobs: [] }) },
           local: {
@@ -264,6 +270,18 @@ async function main() {
     await page.waitForFunction(() => document.getElementById('notice').textContent.includes('No downloadable'));
     assert.equal(await page.locator('#video').isVisible(), false);
     await page.screenshot({ path: path.join(artifacts, 'popup-error.png'), fullPage: true });
+    await page.evaluate(() => { window.testMode = 'player'; window.currentTab.url = 'https://courses.example.com/lesson'; });
+    await page.locator('#refresh').click();
+    await page.locator('#scan-player').waitFor({ state: 'visible' });
+    await page.screenshot({ path: path.join(artifacts, 'popup-player.png'), animations: 'disabled' });
+    await page.locator('#scan-player').click();
+    await page.waitForFunction(() => document.getElementById('notice').textContent.includes('لم يتم السماح'));
+    assert.deepEqual(await page.evaluate(() => window.requestedOrigins), ['https://player.hotmart.com/*']);
+    await page.evaluate(() => { window.allowPlayer = true; });
+    await page.locator('#scan-player').click();
+    await page.locator('#video').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#scan-player').isVisible(), false);
+    assert.equal(await page.evaluate(() => window.actions.filter(action => action.action === 'analyze').at(-1).scanPlayer), true);
     await page.evaluate(() => { window.testMode = 'missing'; });
     // Reconnect through the same initialization path used by the real popup.
     await page.locator('#reconnect').evaluate(element => { element.closest('#setup').hidden = false; });
@@ -323,6 +341,8 @@ async function main() {
     themePopup = await openThemePopup(context);
     assert.equal(await themePopup.locator('html').getAttribute('data-theme'), 'dark');
     console.log('Theme choice persisted in real chrome.storage.local across popup reopening and browser restart.');
+    await context.close();
+    await require('./discovery-browser-test.cjs').run(chromium, extensionPath);
   } finally {
     if (server) await new Promise(resolve => server.close(resolve));
     await context.close();
