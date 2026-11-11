@@ -114,7 +114,11 @@ async function handle(message) {
       return result;
     } finally { await saveDestination({ choosingFolder: false }); }
   }
-  if (message.action === 'openFolder') return request('openFolder', { jobId: message.jobId });
+  if (message.action === 'openFolder') {
+    const job = message.jobId ? jobs.find(item => item.id === message.jobId) : null;
+    if (message.jobId && !job) throw new Error('التحميل غير موجود في سجل الجلسة.');
+    return request('openFolder', { jobId: message.jobId, knownDownloadDir: job?.downloadDir });
+  }
   throw new Error('Unknown extension action.');
 }
 

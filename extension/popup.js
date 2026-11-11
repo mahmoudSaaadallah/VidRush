@@ -6,13 +6,15 @@ let media;
 let analyzing = false;
 let connected = false;
 let destination = { downloadDir: '', choosingFolder: false };
+let folderFeatures = false;
+let analysisSequence = 0;
 
 function renderDestination(value) {
   destination = { ...destination, ...value };
   $('destination-path').value = destination.downloadDir || '';
   $('destination-path').title = destination.downloadDir || '';
   $('folder').title = destination.downloadDir || '';
-  $('choose-folder').disabled = !connected || destination.choosingFolder;
+  $('choose-folder').disabled = !connected || !folderFeatures || destination.choosingFolder;
   $('choose-folder').textContent = destination.choosingFolder ? 'اختيار المجلد مفتوح…' : 'اختيار المجلد';
   $('destination').setAttribute('aria-busy', String(destination.choosingFolder));
   $('download').disabled = !connected || !media || destination.choosingFolder;
@@ -54,6 +56,7 @@ function renderJobs(jobs) {
     location.title = job.downloadDir || '';
     const openJob = item.querySelector('.open-job');
     openJob.hidden = job.status !== 'completed';
+    openJob.disabled = !folderFeatures;
     openJob.addEventListener('click', async () => {
       try { await call('openFolder', { jobId: job.id }); }
       catch (error) { notice(error.message, 'error'); }
@@ -74,19 +77,29 @@ function renderJobs(jobs) {
 }
 
 async function analyze(refresh = false) {
-  if (analyzing) return;
+  let tab;
+  try { [tab] = await chrome.tabs.query({ active: true, currentWindow: true }); }
+  catch (error) { notice(error.message, 'error'); return; }
+  if (analyzing && tab?.id === activeTab?.id && tab?.url === activeTab?.url) return;
+  const sequence = ++analysisSequence;
+  activeTab = tab;
+  try { $('site').textContent = new URL(activeTab.url).hostname; }
+  catch { $('site').textContent = 'افتح صفحة الفيديو'; }
+  media = null;
+  $('video').hidden = true;
+  document.body.classList.remove('has-video');
   if (!activeTab?.url || !/^https?:\/\//i.test(activeTab.url)) {
+    analyzing = false;
     notice('افتح صفحة فيديو على موقع ويب، ثم افتح الإضافة.', 'error');
     return;
   }
   analyzing = true;
-  media = null;
-  $('video').hidden = true;
-  document.body.classList.remove('has-video');
-  $('refresh').disabled = true;
+  $('refresh').disabled = !connected;
   notice('جارٍ فحص الفيديو والجودات المتاحة…');
   try {
-    media = await call('analyze', { tabId: activeTab.id, url: activeTab.url, refresh });
+    const result = await call('analyze', { tabId: activeTab.id, url: activeTab.url, refresh });
+    if (sequence !== analysisSequence) return;
+    media = result;
     $('title').textContent = media.title;
     $('extractor').textContent = media.site;
     $('duration').textContent = media.duration ? `${Math.floor(media.duration / 60)}:${String(Math.floor(media.duration % 60)).padStart(2, '0')}` : '';
@@ -100,8 +113,8 @@ async function analyze(refresh = false) {
     $('video').hidden = false;
     document.body.classList.add('has-video');
     notice('');
-  } catch (error) { notice(error.message, 'error'); }
-  finally { analyzing = false; $('refresh').disabled = !connected; renderDestination(destination); }
+  } catch (error) { if (sequence === analysisSequence) notice(error.message, 'error'); }
+  finally { if (sequence === analysisSequence) { analyzing = false; $('refresh').disabled = !connected; renderDestination(destination); } }
 }
 
 async function initialize() {
@@ -110,9 +123,11 @@ async function initialize() {
   try {
     const { companion, jobs } = await call('bootstrap');
     connected = true;
+    folderFeatures = companion.capabilities?.folderPicker === true && companion.capabilities?.openFolder === true;
+    $('helper-update').hidden = folderFeatures;
     $('connection').textContent = 'متصل محليًا';
     $('connection').classList.add('connected');
-    $('folder').disabled = false;
+    $('folder').disabled = !folderFeatures;
     $('refresh').disabled = false;
     $('setup').hidden = true;
     $('version').textContent = `yt-dlp ${companion.version}`;
@@ -121,6 +136,9 @@ async function initialize() {
     await analyze();
   } catch (error) {
     connected = false;
+    folderFeatures = false;
+    analysisSequence++;
+    analyzing = false;
     $('video').hidden = true;
     document.body.classList.remove('has-video');
     $('connection').textContent = 'غير متصل';
@@ -135,6 +153,16 @@ async function initialize() {
 
 $('extension-id').value = chrome.runtime.id;
 $('brand').addEventListener('click', event => event.preventDefault());
+$('activate-update').addEventListener('click', async () => {
+  $('activate-update').disabled = true;
+  try {
+    const { jobs } = await call('bootstrap');
+    if (jobs.some(job => ['downloading', 'processing'].includes(job.status))) {
+      throw new Error('انتظر انتهاء التحميلات الحالية قبل تفعيل التحديث.');
+    }
+    chrome.runtime.reload();
+  } catch (error) { notice(error.message, 'error'); $('activate-update').disabled = false; }
+});
 $('reconnect').addEventListener('click', () => void initialize());
 $('refresh').addEventListener('click', () => void analyze(true));
 $('folder').addEventListener('click', async () => {

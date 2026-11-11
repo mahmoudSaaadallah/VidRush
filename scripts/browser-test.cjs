@@ -32,6 +32,8 @@ async function main() {
     if (process.argv.includes('--native')) {
       const ping = await worker.evaluate(async () => request('ping', {}, 20000));
       assert.ok(ping.version);
+      assert.equal(ping.capabilities?.folderPicker, true);
+      assert.equal(ping.capabilities?.openFolder, true);
       console.log(`Chrome launched the registered companion successfully: yt-dlp ${ping.version}`);
     }
 
@@ -53,16 +55,20 @@ async function main() {
       window.actions = [];
       window.destination = { downloadDir: 'C:\\Videos', choosingFolder: false };
       window.folderOutcome = 'selected';
+      window.currentTab = { id: 1, url: 'https://example.com/watch?v=test' };
+      window.bootstrapJobs = [];
       let selections = 0, jobNumber = 0, currentJob;
       const updateJobs = () => listeners.forEach(listener => listener({ jobs: { newValue: [currentJob] } }, 'session'));
       window.completeJob = () => { currentJob = { ...currentJob, status: 'completed', percent: 100 }; updateJobs(); };
       window.chrome = {
         runtime: {
           id: 'abcdefghijklmnopabcdefghijklmnop',
+          reload() { window.updateActivated = true; },
           async sendMessage(message) {
             window.actions.push(message);
             if (window.testMode === 'missing') return { ok: false, error: 'تعذّر الاتصال بالبرنامج المساعد. شغّل Install.cmd ثم أعد المحاولة.' };
-            if (message.action === 'bootstrap') return { ok: true, data: { companion: { version: 'test', ...window.destination }, jobs: [] } };
+            if (message.action === 'bootstrap') return { ok: true, data: { companion: { version: 'test', ...window.destination,
+              capabilities: window.testMode === 'legacy' ? undefined : { folderPicker: true, openFolder: true } }, jobs: window.bootstrapJobs } };
             if (message.action === 'chooseFolder') {
               if (window.folderOutcome === 'error') return { ok: false, error: 'Folder is not writable.' };
               if (window.folderOutcome === 'cancel') return { ok: true, data: { ...window.destination, cancelled: true } };
@@ -75,7 +81,10 @@ async function main() {
             }
             if (message.action === 'analyze') {
               if (window.testMode === 'unsupported') return { ok: false, error: 'No downloadable video with audio was found.' };
-              return { ok: true, data: { token: 'video', title: '<script>alert(1)</script> — فيديو تجريبي', duration: 83, site: 'Test site', options: [
+              const slow = message.url.endsWith('/slow-video');
+              if (slow) await new Promise(resolve => { window.releaseSlowAnalysis = resolve; });
+              const title = slow ? 'Old delayed video' : message.url.endsWith('/latest-video') ? 'Latest video' : '<script>alert(1)</script> — فيديو تجريبي';
+              return { ok: true, data: { token: 'video', title, duration: 83, site: 'Test site', options: [
                 { id: '1080', label: '1080p · 60 fps · MP4', bytes: 1024 ** 2 * 85 },
                 { id: '720', label: '720p · MP4', bytes: 1024 ** 2 * 40 },
               ] } };
@@ -91,7 +100,7 @@ async function main() {
             return { ok: true, data: {} };
           },
         },
-        tabs: { query: async () => [{ id: 1, url: 'https://example.com/watch?v=test' }] },
+        tabs: { query: async () => [{ ...window.currentTab }] },
         storage: { session: { get: async () => ({ jobs: [] }) }, onChanged: { addListener: callback => listeners.push(callback) } },
       };
     });
@@ -132,6 +141,39 @@ async function main() {
     await page.locator('#download').click();
     await page.locator('.cancel').click();
     assert.match(await page.locator('.job-status').innerText(), /تم الإلغاء/);
+    await page.evaluate(() => { window.currentTab = { id: 1, url: 'https://www.facebook.com/reel/new-video' }; });
+    await page.locator('#refresh').click();
+    await page.waitForFunction(() => document.getElementById('site').textContent === 'www.facebook.com' && !document.getElementById('video').hidden);
+    assert.equal(await page.evaluate(() => window.actions.filter(action => action.action === 'analyze').at(-1).url), 'https://www.facebook.com/reel/new-video');
+    await page.evaluate(() => { window.currentTab.url = 'https://www.facebook.com/reel/another-video'; });
+    await page.locator('#refresh').click();
+    await page.waitForFunction(() => !document.getElementById('video').hidden);
+    assert.equal(await page.evaluate(() => window.actions.filter(action => action.action === 'analyze').at(-1).url), 'https://www.facebook.com/reel/another-video');
+    await page.evaluate(() => { window.currentTab.url = 'https://www.facebook.com/slow-video'; });
+    await page.locator('#refresh').click();
+    await page.waitForFunction(() => typeof window.releaseSlowAnalysis === 'function');
+    await page.evaluate(() => { window.currentTab.url = 'https://www.facebook.com/latest-video'; });
+    await page.locator('#refresh').click();
+    await page.waitForFunction(() => document.getElementById('title').textContent === 'Latest video');
+    await page.evaluate(async () => { window.releaseSlowAnalysis(); await new Promise(resolve => setTimeout(resolve, 20)); });
+    assert.equal(await page.locator('#title').innerText(), 'Latest video');
+    await page.evaluate(() => { window.testMode = 'legacy'; document.getElementById('setup').hidden = false; });
+    await page.locator('#reconnect').click();
+    await page.locator('#helper-update').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#choose-folder').isDisabled(), true);
+    assert.equal(await page.locator('#folder').isDisabled(), true);
+    assert.match(await page.locator('#helper-update').innerText(), /Update.cmd/);
+    await page.evaluate(() => { window.bootstrapJobs = [{ id: 'active', status: 'downloading' }]; });
+    await page.locator('#activate-update').click();
+    await page.waitForFunction(() => document.getElementById('notice').textContent.includes('انتظر انتهاء'));
+    assert.equal(await page.evaluate(() => !!window.updateActivated), false);
+    await page.evaluate(() => { window.bootstrapJobs = []; });
+    await page.locator('#activate-update').click();
+    await page.waitForFunction(() => window.updateActivated === true);
+    await page.evaluate(() => { window.testMode = 'ready'; document.getElementById('setup').hidden = false; });
+    await page.locator('#reconnect').click();
+    await page.locator('#helper-update').waitFor({ state: 'hidden' });
+    await page.locator('#video').waitFor({ state: 'visible' });
     await page.evaluate(() => { window.testMode = 'unsupported'; });
     await page.locator('#refresh').click();
     await page.waitForFunction(() => document.getElementById('notice').textContent.includes('No downloadable'));
@@ -146,7 +188,7 @@ async function main() {
     assert.equal(await page.locator('#extension-id').inputValue(), 'abcdefghijklmnopabcdefghijklmnop');
     await page.screenshot({ path: path.join(artifacts, 'popup-setup.png'), fullPage: true });
     assert.deepEqual(errors, []);
-    console.log('Popup folder selection/cancellation/errors, per-job folders, quality selection, progress, setup, RTL layout and text safety passed.');
+    console.log('Popup current-page refresh, legacy-helper detection, folder actions, quality selection, progress, setup and layout passed.');
     const guide = installExtension(root, path.join(profile, 'VidRush & اسم'), 'D:\\My Videos');
     await page.goto(pathToFileURL(guide.guidePath).href);
     assert.equal(await page.locator('#extension-path').inputValue(), guide.extensionPath);
