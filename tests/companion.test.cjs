@@ -14,7 +14,7 @@ test('a single embedded video keeps its referrer for download without exposing p
   const h = harness(); t.after(h.cleanup);
   const url = 'https://cdn.test/master.m3u8?token=secret';
   const referer = 'https://player.hotmart.com/';
-  const inspect = h.companion.handle({ id: 'inspect', action: 'inspect', url, referer, title: 'Lesson title' });
+  const inspect = h.companion.handle({ id: 'inspect', action: 'inspect', url, referer, userAgent: 'Browser UA', origin: 'https://player.hotmart.com', title: 'Lesson title' });
   assert.equal(h.calls[0].args[h.calls[0].args.indexOf('--referer') + 1], referer);
   h.calls[0].child.stdout.write(JSON.stringify({ _type: 'playlist', entries: [{ title: 'master', formats: [{ format_id: '1', url, ext: 'mp4', height: 720 }] }] }));
   h.calls[0].child.emit('close', 0); await inspect;
@@ -24,6 +24,8 @@ test('a single embedded video keeps its referrer for download without exposing p
   await h.companion.handle({ id: 'download', action: 'download', token: media.token, choice: media.options[0].id, referer: 'https://untrusted.test/' });
   const download = h.calls.at(-1);
   assert.equal(download.args[download.args.indexOf('--referer') + 1], referer);
+  assert.equal(download.args[download.args.indexOf('--user-agent') + 1], 'Browser UA');
+  assert.equal(download.args[download.args.indexOf('--add-header') + 1], 'Origin:https://player.hotmart.com');
   assert.equal(download.args.at(-1), url);
   assert.equal(JSON.stringify(h.events).includes('token=secret'), false);
   download.child.stderr.write('HTTP 403: ' + url); download.child.emit('close', 1); await tick();

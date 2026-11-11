@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { validateUrl, buildMedia, publicMedia, downloadArgs } = require('../host/media.cjs');
+const { validateUrl, buildMedia, publicMedia, downloadArgs, sourceArgs } = require('../host/media.cjs');
 const { extensionId, checksumFor } = require('../scripts/install.cjs');
 const formats = [
   { format_id: '22', url: 'https://cdn.test/v', height: 720, fps: 30, ext: 'mp4', vcodec: 'avc1', acodec: 'aac', tbr: 500, filesize: 100 },
@@ -9,6 +9,11 @@ const formats = [
   { format_id: '140', url: 'https://cdn.test/a', ext: 'm4a', vcodec: 'none', acodec: 'aac', abr: 128, filesize: 20 },
   { format_id: '251', url: 'https://cdn.test/opus', ext: 'webm', vcodec: 'none', acodec: 'opus', abr: 160, filesize: 25 },
 ];
+
+test('source context only allows validated referrer, user agent and origin arguments', () => {
+  assert.deepEqual(sourceArgs('https://player.test/', { userAgent: 'Browser', origin: 'https://player.test', Cookie: 'ignored' }), ['--referer', 'https://player.test/', '--user-agent', 'Browser', '--add-header', 'Origin:https://player.test']);
+  for (const context of [{ userAgent: 'bad\r\nCookie: secret' }, { origin: 'file:///private' }, { origin: 'https://player.test/path' }, { origin: 'https://player.test/\nInjected: yes' }, { userAgent: 'a'.repeat(513) }]) assert.throws(() => sourceArgs(undefined, context), /Invalid|HTTP/);
+});
 
 test('URL validation rejects non-web protocols, credentials, options, and malformed values', () => {
   for (const value of ['file:///C:/secret', 'javascript:alert(1)', '--exec=calc', 'https://user:pass@example.com', {}, '']) {
