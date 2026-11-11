@@ -1,6 +1,6 @@
 :root { color-scheme: dark; --bg:#0f172a; --card:#192134; --text:#f8fafc; --muted:#a6b3c8; --border:#334155; --accent:#ec4899; --blue:#2563eb; --error:#fda4af; }
 * { box-sizing:border-box; }
-body { margin:0; width:400px; background:var(--bg); color:var(--text); font:14px/1.65 "Segoe UI",Tahoma,Arial,sans-serif; }
+body { margin:0; width:400px; max-width:100%; background:var(--bg); color:var(--text); font:14px/1.65 "Segoe UI",Tahoma,Arial,sans-serif; }
 header { padding:20px 22px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--border); }
 #brand { display:flex; align-items:center; gap:10px; color:var(--text); text-decoration:none; font-weight:800; font-size:21px; line-height:1.15; }
 #brand small { display:block; color:var(--muted); font-size:11px; font-weight:400; direction:rtl; margin-top:5px; }

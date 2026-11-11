@@ -133,7 +133,7 @@ async function install() {
     console.log('Extracting FFmpeg (this can take a minute) ...');
     const extracted = path.join(stage, 'ffmpeg');
     execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-      'Expand-Archive -LiteralPath $env:VIDRUSH_ARCHIVE -DestinationPath $env:VIDRUSH_EXTRACTED'],
+      "$ErrorActionPreference = 'Stop'; [void][Reflection.Assembly]::LoadWithPartialName('System.IO.Compression.FileSystem'); [IO.Compression.ZipFile]::ExtractToDirectory($env:VIDRUSH_ARCHIVE, $env:VIDRUSH_EXTRACTED)"],
       { env: { ...process.env, VIDRUSH_ARCHIVE: archive, VIDRUSH_EXTRACTED: extracted }, windowsHide: true, stdio: 'inherit' });
     for (const filename of ['ffmpeg.exe', 'ffprobe.exe']) {
       const file = findFile(extracted, filename);
