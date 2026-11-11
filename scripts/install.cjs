@@ -7,7 +7,7 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 const { Readable, Transform } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, execFile } = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
 const HOST = 'com.vidrush.companion';
@@ -17,8 +17,8 @@ function extensionId(key) {
     .replace(/[0-9a-f]/g, char => String.fromCharCode(97 + parseInt(char, 16)));
 }
 
-async function response(url) {
-  const result = await fetch(url, { headers: { 'User-Agent': 'VidRush-Installer/0.1' }, signal: AbortSignal.timeout(900000) });
+async function response(url, headers = {}) {
+  const result = await fetch(url, { headers: { 'User-Agent': 'VidRush-Installer/0.1', ...headers }, signal: AbortSignal.timeout(900000) });
   if (!result.ok) throw new Error(`Download failed (${result.status}): ${url}`);
   return result;
 }
@@ -31,10 +31,23 @@ function checksumFor(text, filename) {
 }
 
 async function downloadVerified(url, target, expected) {
+  const cacheRoot = path.join(process.env.LOCALAPPDATA, 'VidRush', 'cache');
+  const cache = path.join(cacheRoot, `${expected}-${path.basename(target)}`);
+  async function verified(file) {
+    if (!fs.existsSync(file)) return false;
+    const hash = crypto.createHash('sha256');
+    for await (const data of fs.createReadStream(file)) hash.update(data);
+    return hash.digest('hex') === expected;
+  }
+  if (await verified(cache)) {
+    fs.copyFileSync(cache, target);
+    console.log(`Using verified cached ${path.basename(target)}.`);
+    return;
+  }
   console.log(`Downloading ${path.basename(target)} ...`);
   const result = await response(url);
   let received = 0, lastReported = 0;
-  const meter = new Transform({ transform(chunk, _encoding, callback) {
+  const meter = () => new Transform({ transform(chunk, _encoding, callback) {
     received += chunk.length;
     if (received - lastReported >= 10 * 1024 * 1024) {
       console.log(`  ${Math.round(received / 1024 / 1024)} MB downloaded`);
@@ -42,10 +55,39 @@ async function downloadVerified(url, target, expected) {
     }
     callback(null, chunk);
   } });
-  await pipeline(Readable.fromWeb(result.body), meter, fs.createWriteStream(target));
-  const hash = crypto.createHash('sha256');
-  for await (const chunk of fs.createReadStream(target)) hash.update(chunk);
-  if (hash.digest('hex') !== expected) throw new Error(`Checksum verification failed: ${path.basename(target)}`);
+  const length = Number(result.headers.get('content-length'));
+  if (length >= 8 * 1024 * 1024 && result.headers.get('accept-ranges') === 'bytes') {
+    const downloadUrl = result.url;
+    await result.body.cancel();
+    const parts = Array.from({ length: 4 }, (_, index) => `${target}.part-${index}`);
+    try {
+      const downloads = await Promise.allSettled(parts.map(async (file, index) => {
+        const start = Math.floor(length * index / parts.length);
+        const end = Math.floor(length * (index + 1) / parts.length) - 1;
+        // Windows' built-in curl handles long release-asset transfers reliably.
+        // Keep a Node fallback for Windows images without curl.exe.
+        try {
+          await new Promise((resolve, reject) => execFile('curl.exe', ['--fail', '--location', '--silent', '--show-error',
+            '--retry', '2', '--connect-timeout', '20', '--max-time', '900', '--range', `${start}-${end}`, '--output', file, downloadUrl],
+          { windowsHide: true }, (error, _stdout, stderr) => error ? reject(Object.assign(error, { transferError: stderr })) : resolve()));
+        } catch (error) {
+          if (error.code !== 'ENOENT') throw new Error(`Release download failed: ${error.transferError || error.message}`);
+          const part = await response(downloadUrl, { Range: `bytes=${start}-${end}` });
+          if (part.status !== 206) { await part.body.cancel(); throw new Error('The download server did not honor a partial download request. Retry setup.'); }
+          await pipeline(Readable.fromWeb(part.body), meter(), fs.createWriteStream(file));
+        }
+        if (fs.statSync(file).size !== end - start + 1) throw new Error('Incomplete release download. Retry setup.');
+        console.log(`  Part ${index + 1}/${parts.length} downloaded.`);
+      }));
+      const failed = downloads.find(result => result.status === 'rejected');
+      if (failed) throw failed.reason;
+      async function* chunks() { for (const part of parts) for await (const data of fs.createReadStream(part)) yield data; }
+      await pipeline(Readable.from(chunks()), fs.createWriteStream(target));
+    } finally { for (const part of parts) if (fs.existsSync(part)) fs.unlinkSync(part); }
+  } else await pipeline(Readable.fromWeb(result.body), meter(), fs.createWriteStream(target));
+  if (!await verified(target)) throw new Error(`Checksum verification failed: ${path.basename(target)}`);
+  fs.mkdirSync(cacheRoot, { recursive: true });
+  fs.copyFileSync(target, cache);
   console.log('SHA-256 verified.');
 }
 

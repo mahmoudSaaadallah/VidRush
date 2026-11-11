@@ -69,7 +69,7 @@ function downloadArgs(config, url, choice) {
     '--progress-template', 'download:VIDRUSH_PROGRESS:%(progress)j',
     '--print', 'after_move:VIDRUSH_FILE:%(filepath)j', '--no-simulate',
     '--windows-filenames', '--trim-filenames', '180', '--no-overwrites',
-    '--paths', config.downloadDir, '--output', '%(title).140B [%(id)s].%(ext)s',
+    '--paths', config.downloadDir, '--output', '%(title).120B [%(id)s] [%(format_id)s].%(ext)s',
     '--format', choice.selector];
   if (config.ffmpegPath) args.push('--ffmpeg-location', config.ffmpegPath);
   if (choice.needsMerge) args.push('--merge-output-format', choice.container);
