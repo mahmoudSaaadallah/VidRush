@@ -5,7 +5,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
 
-function harness(initialJobs = []) {
+function harness(initialJobs = [], options = {}) {
   const sent = [], stored = {}, callbacks = {};
   const port = {
     onMessage: { addListener(fn) { callbacks.message = fn; } },
@@ -19,13 +19,67 @@ function harness(initialJobs = []) {
     },
     storage: { session: { get: async () => ({ jobs: initialJobs }), set: async data => Object.assign(stored, JSON.parse(JSON.stringify(data))) } },
     tabs: { get: async id => ({ id, url: 'https://example.com/video' }), onRemoved: { addListener() {} } },
+    scripting: { executeScript: async () => [{ frameId: 0, result: { pageUrl: 'https://example.com/video', sources: [], playerOrigins: [], ...options.page } }, ...(options.frames || [])] },
   };
-  const context = vm.createContext({ chrome, setTimeout, clearTimeout, console });
+  const context = vm.createContext({ chrome, setTimeout, clearTimeout, console,
+    importScripts: filename => vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'extension', filename), 'utf8'), context) });
   vm.runInContext(`${fs.readFileSync(path.join(__dirname, '..', 'extension', 'background.js'), 'utf8')}\nglobalThis.api = { handle };`, context);
   const respond = (message, data) => callbacks.message({ id: message.id, ok: true, data });
-  return { api: context.api, sent, stored, callbacks, respond };
+  return { api: context.api, sent, stored, callbacks, respond, chrome };
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
+
+async function bootstrap(h, pageSources = true) {
+  const operation = h.api.handle({ action: 'bootstrap' });
+  await tick(); h.respond(h.sent.at(-1), { capabilities: { pageSources } });
+  await tick(); h.respond(h.sent.at(-1), []);
+  await operation;
+}
+
+test('unsupported pages fall back to media discovered in an authorized player frame', async () => {
+  const source = { url: 'https://cdn.example/master.m3u8?token=ephemeral', referer: 'https://player.hotmart.com/' };
+  const h = harness([], { page: { title: 'Lesson title' }, frames: [{ frameId: 3, result: { sources: [source] } }] });
+  await bootstrap(h);
+  const operation = h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video' });
+  await tick(); h.callbacks.message({ id: h.sent.at(-1).id, ok: false, error: 'Unsupported URL' });
+  await tick();
+  assert.equal(h.sent.at(-1).url, source.url);
+  assert.equal(h.sent.at(-1).referer, source.referer);
+  assert.equal(h.sent.at(-1).title, 'Lesson title');
+  h.respond(h.sent.at(-1), { token: 'detected-video' });
+  assert.equal((await operation).token, 'detected-video');
+});
+
+test('locked player offers only its optional origin and rescans after permission without repeating the failed page URL', async () => {
+  const origin = 'https://player.hotmart.com/*';
+  const h = harness([], { page: { playerOrigins: [origin] } });
+  await bootstrap(h);
+  const operation = h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video' });
+  const rejected = assert.rejects(operation, error => error.playerOrigins[0] === origin && /شغّل الفيديو/.test(error.message));
+  await tick(); h.callbacks.message({ id: h.sent.at(-1).id, ok: false, error: 'Unsupported URL' });
+  await rejected;
+  h.chrome.scripting.executeScript = async () => [{ frameId: 0, result: { pageUrl: 'https://example.com/video', sources: [{ url: 'https://cdn.test/master.m3u8', referer: 'https://example.com/' }] } }];
+  const before = h.sent.length;
+  const retry = h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video', refresh: true, scanPlayer: true });
+  await tick();
+  assert.equal(h.sent.length, before + 1);
+  assert.equal(h.sent.at(-1).url, 'https://cdn.test/master.m3u8');
+  h.respond(h.sent.at(-1), { token: 'ready' }); await retry;
+});
+
+test('navigation during fallback and an outdated companion cannot produce a stale or unsupported selection', async () => {
+  const h = harness(); await bootstrap(h);
+  const operation = h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video' });
+  const rejected = assert.rejects(operation, /تغيّرت الصفحة/);
+  await tick();
+  h.chrome.tabs.get = async id => ({ id, url: 'https://example.com/next-video' });
+  h.callbacks.message({ id: h.sent.at(-1).id, ok: false, error: 'Unsupported URL' });
+  await rejected;
+  const old = harness(); await bootstrap(old, false);
+  const retry = old.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video', scanPlayer: true });
+  await assert.rejects(retry, /Update.cmd/);
+  assert.equal(old.sent.length, 2, 'No media requests may reach a helper without the new capability.');
+});
 
 test('worker reuses an in-flight analysis across popup openings and correlates replies', async () => {
   const h = harness();

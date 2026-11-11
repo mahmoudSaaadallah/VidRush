@@ -61,7 +61,11 @@
           <details class="support-details"><summary>معلومات الدعم</summary><label for="extension-id">معرّف الإضافة</label><input id="extension-id" readonly dir="ltr"></details>
         </section>
 
-        <div id="video-placeholder" class="placeholder" hidden><svg class="icon" aria-hidden="true"><use href="#i-film"/></svg><p>افتح صفحة فيديو لعرض الجودات المتاحة.</p></div>
+        <div id="video-placeholder" class="placeholder" hidden>
+          <svg class="icon" aria-hidden="true"><use href="#i-film"/></svg><p id="placeholder-message">افتح صفحة فيديو لعرض الجودات المتاحة.</p>
+          <button id="scan-player" class="outline-button" type="button" hidden>فحص مشغّل الفيديو</button>
+          <p id="scan-hint" hidden>شغّل الفيديو أولًا. قد يطلب Chrome السماح بالوصول للمشغّل المضمّن؛ وافق ثم افتح الإضافة مجددًا لو أُغلقت.</p>
+        </div>
 
         <section id="video" aria-label="خيارات الفيديو" hidden>
           <div class="video-summary">

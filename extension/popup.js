@@ -9,6 +9,7 @@ let destination = { downloadDir: '', choosingFolder: false };
 let folderFeatures = false;
 let analysisSequence = 0;
 let themeRevision = 0;
+let playerOrigins = [];
 const jobElements = new Map();
 const cancelling = new Set();
 
@@ -58,7 +59,11 @@ function renderDestination(value) {
 
 async function call(action, data = {}) {
   const response = await chrome.runtime.sendMessage({ action, ...data });
-  if (!response?.ok) throw new Error(response?.error || 'تعذّر إكمال الطلب. أعد المحاولة.');
+  if (!response?.ok) {
+    const error = new Error(response?.error || 'تعذّر إكمال الطلب. أعد المحاولة.');
+    error.playerOrigins = response?.playerOrigins || [];
+    throw error;
+  }
   return response.data;
 }
 
@@ -197,7 +202,7 @@ function showPlaceholder(show) {
   $('video-placeholder').hidden = !show;
 }
 
-async function analyze(refresh = false) {
+async function analyze(refresh = false, scanPlayer = false) {
   let tab;
   try { [tab] = await chrome.tabs.query({ active: true, currentWindow: true }); }
   catch (error) { notice(error.message, 'error'); return; }
@@ -207,6 +212,10 @@ async function analyze(refresh = false) {
   try { $('site').textContent = new URL(activeTab.url).hostname; }
   catch { $('site').textContent = 'افتح صفحة الفيديو'; }
   media = null;
+  playerOrigins = [];
+  text($('placeholder-message'), 'افتح صفحة فيديو لعرض الجودات المتاحة.');
+  $('scan-player').hidden = true;
+  $('scan-hint').hidden = true;
   $('video').hidden = true;
   showPlaceholder(false);
   renderDestination(destination);
@@ -222,7 +231,7 @@ async function analyze(refresh = false) {
   $('refresh').setAttribute('aria-busy', 'true');
   notice('جارٍ فحص الفيديو والجودات المتاحة…');
   try {
-    const result = await call('analyze', { tabId: activeTab.id, url: activeTab.url, refresh });
+    const result = await call('analyze', { tabId: activeTab.id, url: activeTab.url, refresh, scanPlayer });
     if (sequence !== analysisSequence) return;
     media = result;
     text($('title'), media.title);
@@ -233,7 +242,13 @@ async function analyze(refresh = false) {
     $('video').hidden = false;
     notice('');
   } catch (error) {
-    if (sequence === analysisSequence) { notice(error.message, 'error'); showPlaceholder(true); }
+    if (sequence === analysisSequence) {
+      playerOrigins = error.playerOrigins || [];
+      if (playerOrigins.length) text($('placeholder-message'), 'الفيديو موجود داخل مشغّل مضمّن في الصفحة.');
+      $('scan-player').hidden = !playerOrigins.length;
+      $('scan-hint').hidden = !playerOrigins.length;
+      notice(error.message, 'error'); showPlaceholder(true);
+    }
   } finally {
     if (sequence === analysisSequence) {
       analyzing = false;
@@ -310,6 +325,17 @@ $('activate-update').addEventListener('click', async () => {
 });
 $('reconnect').addEventListener('click', () => void initialize());
 $('refresh').addEventListener('click', () => void analyze(true));
+$('scan-player').addEventListener('click', async () => {
+  if (!playerOrigins.length) return;
+  $('scan-player').disabled = true;
+  try {
+    // Keep request() in this click handler so Chrome sees the user gesture.
+    const granted = await chrome.permissions.request({ origins: playerOrigins });
+    if (!granted) { notice('لم يتم السماح بفحص المشغّل. تقدر تسمح له من نفس الزر وقت ما تحب.'); return; }
+    await analyze(true, true);
+  } catch (error) { notice(error.message, 'error'); }
+  finally { $('scan-player').disabled = false; }
+});
 $('folder').addEventListener('click', async () => {
   $('folder').disabled = true;
   try { await call('openFolder'); } catch (error) { notice(error.message, 'error'); }

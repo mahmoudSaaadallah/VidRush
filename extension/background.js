@@ -1,8 +1,11 @@
 'use strict';
 
+importScripts('discovery.js');
+
 const HOST = 'com.vidrush.companion';
 let nativePort;
 let nextId = 0;
+let pageSources = false;
 const pending = new Map();
 const analyses = new Map();
 let jobs = [];
@@ -66,11 +69,51 @@ function request(action, data = {}, timeout = 100000) {
   });
 }
 
+async function inspectTab(tabId, url, scanOnly = false) {
+  let originalError;
+  if (!scanOnly) {
+    let media;
+    try { media = await request('inspect', { url }); }
+    catch (error) { originalError = error; }
+    if (media) {
+      if ((await chrome.tabs.get(tabId)).url !== url) throw new Error('تغيّرت الصفحة أثناء الفحص. اضغط تحديث على الفيديو الجديد.');
+      return media;
+    }
+  }
+  // Inspect only frames Chrome permits (activeTab and optional player grants).
+  let frames;
+  try { frames = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: discoverPageMedia }); }
+  catch {
+    throw new Error('تعذّر فحص الصفحة المفتوحة. افتح الإضافة من أيقونتها على صفحة الفيديو وأعد المحاولة.\n' + (originalError?.message || ''));
+  }
+  const current = await chrome.tabs.get(tabId);
+  const main = frames.find(frame => frame.frameId === 0)?.result;
+  if (current.url !== url || main?.pageUrl !== url) throw new Error('تغيّرت الصفحة أثناء الفحص. اضغط تحديث على الفيديو الجديد.');
+  const origins = [...new Set(frames.flatMap(frame => frame.result?.playerOrigins || []))];
+  if (!pageSources) throw new Error('البرنامج المساعد المثبّت لا يدعم فحص المشغّل. شغّل Update.cmd من نسخة المشروع الجديدة، ثم أعد تحميل الإضافة بعد انتهاء التحميلات.');
+  const seen = new Set([url]);
+  const sources = frames.flatMap(frame => frame.result?.hasDrm ? [] : (frame.result?.sources || []).map(source => ({ ...source, title: main.title })));
+  let sourceError;
+  for (const source of sources.filter(source => !seen.has(source.url) && seen.add(source.url)).slice(0, 3)) {
+    const latest = await chrome.tabs.get(tabId);
+    if (latest.url !== url) throw new Error('تغيّرت الصفحة أثناء الفحص. اضغط تحديث على الفيديو الجديد.');
+    let media;
+    try { media = await request('inspect', { url: source.url, referer: source.referer, title: source.title }); }
+    catch (error) { sourceError = error; continue; }
+    if ((await chrome.tabs.get(tabId)).url !== url) throw new Error('تغيّرت الصفحة أثناء الفحص. اضغط تحديث على الفيديو الجديد.');
+    return media;
+  }
+  const error = new Error((origins.length ? 'شغّل الفيديو داخل الموقع، ثم اضغط «فحص مشغّل الفيديو» واسمح بالوصول للمشغّل عند طلب Chrome.' : 'لم يظهر رابط فيديو قابل للتحميل. سجّل الدخول وشغّل الفيديو، ثم اضغط تحديث. بعض المشغّلات والمحتوى المحمي غير مدعومين.') + '\n' + (sourceError?.message || originalError?.message || ''));
+  error.playerOrigins = origins;
+  throw error;
+}
+
 async function handle(message) {
   await ready;
   if (message.action === 'bootstrap') {
     const epoch = destinationEpoch;
     const companion = await request('ping', {}, 20000);
+    pageSources = companion.capabilities?.pageSources === true;
     if (epoch === destinationEpoch) await saveDestination({ downloadDir: companion.downloadDir, choosingFolder: !!companion.choosingFolder });
     const current = await request('status');
     for (const job of current) {
@@ -88,7 +131,7 @@ async function handle(message) {
     let entry = analyses.get(message.tabId);
     if (message.refresh || entry?.url !== message.url) entry = null;
     if (!entry) {
-      entry = { url: message.url, promise: request('inspect', { url: message.url }) };
+      entry = { url: message.url, promise: inspectTab(message.tabId, message.url, message.scanPlayer === true) };
       analyses.set(message.tabId, entry);
       entry.promise.catch(() => { if (analyses.get(message.tabId) === entry) analyses.delete(message.tabId); });
       if (analyses.size > 8) analyses.delete(analyses.keys().next().value);
@@ -124,7 +167,7 @@ async function handle(message) {
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(''))) return false;
-  handle(message).then(data => respond({ ok: true, data })).catch(error => respond({ ok: false, error: error.message }));
+  handle(message).then(data => respond({ ok: true, data })).catch(error => respond({ ok: false, error: error.message, playerOrigins: error.playerOrigins || [] }));
   return true;
 });
 

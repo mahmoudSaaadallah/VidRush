@@ -6,8 +6,17 @@
   "minimum_chrome_version": "120",
   "permissions": [
     "activeTab",
+    "scripting",
     "nativeMessaging",
     "storage"
+  ],
+  "optional_host_permissions": [
+    "https://player.hotmart.com/*",
+    "https://fast.wistia.com/*",
+    "https://fast.wistia.net/*",
+    "https://player.vimeo.com/*",
+    "https://www.youtube.com/*",
+    "https://www.youtube-nocookie.com/*"
   ],
   "background": {
     "service_worker": "background.js"
