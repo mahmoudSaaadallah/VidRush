@@ -129,13 +129,29 @@ File names include the source video ID and format IDs, so different qualities of
 - Separate video and audio tracks download in sequence. The percentage can restart for the second track, then the status changes to merging. Wait for **Completed**, rather than a track reaching 100%.
 - Cancelling may leave `.part` files or intermediate tracks. Files already on disk are not automatically deleted.
 
+### Embedded players and signed-in lessons
+
+If a lesson plays in Chrome but VidRush reports **Unsupported URL**, the lesson page may be a wrapper around a separate video player. VidRush now tries the open page's video sources and recently loaded HLS/DASH manifests after normal URL analysis fails.
+
+1. Sign in to the course website yourself and open a lesson you can watch.
+2. Start the video and let it play for a few seconds. Keep the lesson page open.
+3. Open VidRush. If **`فحص مشغّل الفيديو`** (Scan video player) appears, click it. Chrome may ask to allow access to that embedded player's site, such as **player.hotmart.com**. This permission is optional and limited to the named player site.
+4. Allow the player access if you want to use this feature. If the popup closes during Chrome's permission prompt, reopen VidRush; it will retry with the granted access.
+5. Choose a quality and download normally. The companion keeps the detected source's referrer for both analysis and downloading.
+
+<img src="docs/popup-player.png" width="300" alt="VidRush offering an optional Scan video player action for an embedded lesson">
+
+This helps with non-DRM embedded players, including Hotmart/Teachable pages that expose a playable stream in your browser. It does not guarantee that every lesson or website works. VidRush does not sign you in or copy browser cookies/passwords. A stream may still require cookies, expire, or be protected. If no source appears, reload the lesson, start playback again, and press **Refresh**. A `blob:` address alone cannot be downloaded.
+
+Existing users must run **`Update.cmd`** from the latest project copy, finish active downloads, then reload VidRush at `chrome://extensions` before using player scanning. Both the extension and companion need this update. Chrome manages the optional player permission, which can be revoked in the extension's site-access settings.
+
 ## Supported websites and limits
 
 Support comes from yt-dlp's [supported sites](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md) and generic extractor. Website changes, authentication, regional restrictions, and anti-bot checks can still prevent a download.
 
 - **DRM-protected videos are unsupported.**
 - Login-required, private, subscription, age-restricted, or anti-bot-protected videos may fail. This version does not import browser cookies or credentials.
-- The extension sends the **page URL** to yt-dlp. It does not scan network traffic or discover every video embedded in an unrelated page.
+- VidRush first sends the **page URL** to yt-dlp. On failure, it can inspect video elements, recognized player embeds, and the permitted frames' recent Resource Timing entries for media URLs. It does not continuously monitor network traffic or discover every embedded video.
 - Playlists are not downloaded as a batch. Open the individual video's own page.
 - Live streams are outside the supported workflow for this version.
 - Downloads survive closing the popup, but **not closing Chrome, reloading the extension, restarting the companion, sleeping the PC indefinitely, or losing the process**. Reopen the page and retry if interrupted.
@@ -191,6 +207,8 @@ If you customized `downloadDir` to point inside the companion installation folde
 | Analysis times out | Retry on the individual video's page. Analysis has a 90-second limit. Check the connection and update the companion. |
 | Download fails with a site error | The original yt-dlp error appears in the download card. Update the companion. Authentication and anti-bot restrictions may still prevent downloading. |
 | Quality list is old or selection expired | Press the circular-arrow button to analyze the page again. |
+| Unsupported URL on a lesson that plays in Chrome | Start playback, reopen VidRush, and use **Scan video player** if offered. Allow access to the named player site and reopen the popup if it closed. See [Embedded players and signed-in lessons](#embedded-players-and-signed-in-lessons). |
+| Player scan finds no source, or a stream returns 403 | Reload the lesson, start playback, and retry. Signed URLs can expire; some streams also need cookies or DRM and remain unsupported. Never paste account credentials into VidRush. |
 | Popup closes when choosing a folder | Finish or cancel the Windows dialog, then click VidRush again. The background connection retains your selection. |
 | Folder picker is already open | Finish or cancel the existing Windows folder dialog before starting another selection. |
 | Folder buttons are disabled, or the popup says the helper is old | Run `Update.cmd` from the latest project folder, finish active downloads, and activate the update or reload VidRush at `chrome://extensions`. Both installed code copies must be updated; merging alone is insufficient. |
@@ -229,7 +247,9 @@ Verified release downloads are cached in `%LOCALAPPDATA%\VidRush\cache` so a ret
 
 There is no local web server or listening TCP port. Chrome starts the companion using [Native Messaging](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging). The native host manifest and companion both check the extension origin.
 
-The extension requests `activeTab`, `nativeMessaging`, and `storage`. It does not request access to all websites, browser cookies, or your browsing history. It reads the active tab's URL when you open it. The URL is passed to the local companion; yt-dlp then connects to the website/CDN. Setup connects to nodejs.org when it needs a runtime and GitHub for yt-dlp/FFmpeg, and checks SHA-256 hashes before using downloaded releases. VidRush has no analytics or remote VidRush backend.
+The extension requests `activeTab`, `scripting`, `nativeMessaging`, and `storage`. Opening VidRush grants temporary access to the active page. `scripting` lets it discover media in permitted frames when URL analysis fails. Optional host access is declared only for Hotmart, Wistia, Vimeo, and YouTube player sites; it is requested for player origins detected on the current page when you click **Scan video player**. There is no required access to all websites, browser cookies, or browsing history.
+
+The page URL, or a discovered source URL and its referrer, is passed to the local companion; yt-dlp then connects to the website/CDN. Signed source URLs stay in the companion's in-memory selection cache and yt-dlp subprocess arguments while needed, rather than the extension's saved job history. Error messages redact URL query strings. This feature does not export cookies, passwords, request bodies, or authorization headers. Setup connects to nodejs.org when it needs a runtime and GitHub for yt-dlp/FFmpeg, and checks SHA-256 hashes before using downloaded releases. VidRush has no analytics or remote VidRush backend.
 
 Third-party components retain their own licenses; see [THIRD_PARTY.md](THIRD_PARTY.md).
 
@@ -245,7 +265,7 @@ npx playwright install chromium
 npm run test:browser
 ```
 
-`npm ci` installs development dependencies only; end users do not need it to run VidRush. The browser tests check the real extension loads and exercise the popup with deterministic companion responses. They cover both themes, saved theme choice across a real browser restart, keyboard controls, compact layout, contrast, quality selection, current-page refresh, folder actions, and download progress/cancellation. They do not download third-party videos.
+`npm ci` installs development dependencies only; end users do not need it to run VidRush. The browser tests check the real extension loads and exercise the popup with deterministic companion responses. They cover both themes, saved theme choice across a real browser restart, keyboard controls, compact layout, contrast, quality selection, current-page refresh, folder actions, download progress/cancellation, and declining/allowing player access. An isolated localhost fixture also runs the shipped discovery function through real Chrome scripting to check cross-origin isolation, granted-frame discovery, signed HLS Resource Timing entries, Wistia markers, and attached MediaKeys. The fixture's extra localhost host grants exist only in its temporary extension copy. Tests do not download third-party videos or use your Chrome profile.
 
 On Windows, test setup without relying on the system Node.js runtime:
 
@@ -261,7 +281,7 @@ To run an additional end-to-end native test on Windows **after installing the co
 npm run test:native
 ```
 
-This generates an original test video using FFmpeg, serves it on localhost, and sends real framed messages to the companion to analyze and download it with yt-dlp. It also persists an injected folder selection, restarts the companion, and verifies that the actual files land in that Unicode folder. The graphical folder picker is mocked in this automated test. Temporary files are isolated from your regular download folder.
+This generates an original test video using FFmpeg, serves it on localhost, and sends real framed messages to the companion to analyze and download it with yt-dlp. A two-quality DASH stream requires the saved referrer for both its manifest and media segments, verifying that analysis and download preserve it. The test also persists an injected folder selection, restarts the companion, and verifies that actual files land in that Unicode folder. The graphical folder picker is mocked in this automated test. Temporary files are isolated from your regular download folder.
 
 To additionally check that Chrome can launch the **registered** native companion:
 
