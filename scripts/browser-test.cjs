@@ -15,11 +15,12 @@ async function main() {
   const extensionPath = process.argv.includes('--installed')
     ? path.join(process.env.LOCALAPPDATA, 'VidRush', 'extension') : path.join(root, 'extension');
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'vidrush-browser-'));
-  const context = await chromium.launchPersistentContext(profile, {
+  const launchOptions = {
     channel: 'chromium', headless: true,
     args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`],
     viewport: { width: 440, height: 1000 },
-  });
+  };
+  let context = await chromium.launchPersistentContext(profile, launchOptions);
   let server;
   try {
     const errors = [];
@@ -40,9 +41,9 @@ async function main() {
     // Exercise the actual DOM/CSS and popup handlers with predictable Chrome/companion responses.
     // No real site is contacted, and these mocks are not part of the shipped extension.
     server = http.createServer((req, res) => {
-      const allowed = new Set(['/popup.html', '/popup.css', '/popup.js', '/icons/48.png']);
+      const allowed = new Set(['/popup.html', '/popup.css', '/popup.js', '/theme-init.js', '/icons/logo.svg', '/icons/48.png']);
       if (!allowed.has(req.url)) { res.writeHead(404); res.end(); return; }
-      res.setHeader('Content-Type', req.url.endsWith('.html') ? 'text/html; charset=utf-8' : req.url.endsWith('.css') ? 'text/css' : req.url.endsWith('.js') ? 'text/javascript' : 'image/png');
+      res.setHeader('Content-Type', req.url.endsWith('.html') ? 'text/html; charset=utf-8' : req.url.endsWith('.css') ? 'text/css' : req.url.endsWith('.js') ? 'text/javascript' : req.url.endsWith('.svg') ? 'image/svg+xml' : 'image/png');
       res.end(fs.readFileSync(path.join(extensionPath, req.url.slice(1))));
     });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -60,6 +61,7 @@ async function main() {
       let selections = 0, jobNumber = 0, currentJob;
       const updateJobs = () => listeners.forEach(listener => listener({ jobs: { newValue: [currentJob] } }, 'session'));
       window.completeJob = () => { currentJob = { ...currentJob, status: 'completed', percent: 100 }; updateJobs(); };
+      window.progressJob = percent => { currentJob = { ...currentJob, percent }; updateJobs(); };
       window.chrome = {
         runtime: {
           id: 'abcdefghijklmnopabcdefghijklmnop',
@@ -85,8 +87,10 @@ async function main() {
               if (slow) await new Promise(resolve => { window.releaseSlowAnalysis = resolve; });
               const title = slow ? 'Old delayed video' : message.url.endsWith('/latest-video') ? 'Latest video' : '<script>alert(1)</script> — فيديو تجريبي';
               return { ok: true, data: { token: 'video', title, duration: 83, site: 'Test site', options: [
-                { id: '1080', label: '1080p · 60 fps · MP4', bytes: 1024 ** 2 * 85 },
-                { id: '720', label: '720p · MP4', bytes: 1024 ** 2 * 40 },
+                { id: '1080', height: 1080, fps: 60, container: 'mp4', label: '1080p · 60 fps · MP4', bytes: 1024 ** 2 * 85 },
+                { id: '720', height: 720, fps: 30, container: 'mp4', label: '720p · MP4', bytes: 1024 ** 2 * 40 },
+                { id: '480', height: 480, fps: 30, container: 'mp4', label: '480p · MP4' },
+                { id: '360', height: 360, fps: 30, container: 'mp4', label: '360p · MP4' },
               ] } };
             }
             if (message.action === 'download') {
@@ -101,12 +105,42 @@ async function main() {
           },
         },
         tabs: { query: async () => [{ ...window.currentTab }] },
-        storage: { session: { get: async () => ({ jobs: [] }) }, onChanged: { addListener: callback => listeners.push(callback) } },
+        storage: {
+          session: { get: async () => ({ jobs: [] }) },
+          local: {
+            get: async () => {
+              const theme = localStorage.getItem('mock-theme');
+              if (localStorage.getItem('delay-theme')) await new Promise(resolve => { window.releaseThemeRead = resolve; });
+              return { theme };
+            },
+            set: async ({ theme }) => { localStorage.setItem('mock-theme', theme); },
+          },
+          onChanged: { addListener: callback => listeners.push(callback) },
+        },
       };
     });
     await page.goto(`${base}/popup.html`);
     await page.locator('#video').waitFor({ state: 'visible' });
-    assert.equal(await page.locator('#quality option').count(), 2);
+    assert.equal(await page.locator('#quality option').count(), 4);
+    assert.equal(await page.locator('.quality-option').count(), 3);
+    assert.equal(await page.locator('#brand img').evaluate(element => element.complete && element.naturalWidth > 0), true);
+    assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
+    await page.getByRole('switch', { name: 'الوضع الداكن' }).click();
+    assert.equal(await page.locator('html').getAttribute('data-theme'), 'light');
+    assert.equal(await page.evaluate(() => localStorage.getItem('mock-theme')), 'light');
+    await page.reload();
+    await page.locator('#video').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('html').getAttribute('data-theme'), 'light');
+    assert.equal(await page.getByRole('switch').getAttribute('aria-checked'), 'false');
+    await page.getByRole('switch').focus();
+    await page.keyboard.press('Space');
+    assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
+    await page.locator('#tab-video').focus();
+    await page.keyboard.press('ArrowLeft');
+    assert.equal(await page.locator('#tab-downloads').getAttribute('aria-selected'), 'true');
+    assert.equal(await page.locator('#empty').isVisible(), true);
+    await page.keyboard.press('ArrowRight');
+    assert.equal(await page.locator('#tab-video').getAttribute('aria-selected'), 'true');
     assert.match(await page.locator('#title').innerText(), /<script>/);
     assert.equal(await page.locator('#title script').count(), 0);
     await page.setViewportSize({ width: 400, height: 600 });
@@ -124,23 +158,73 @@ async function main() {
     await page.evaluate(() => { window.folderOutcome = 'selected'; });
     await page.locator('#choose-folder').click();
     await page.waitForFunction(() => document.getElementById('destination-path').value.startsWith('D:'));
-    await page.locator('body').screenshot({ path: path.join(artifacts, 'popup-ready.png') });
-    await page.locator('#quality').selectOption('720');
+    const downloadBounds = await page.locator('#download').boundingBox();
+    const mainBounds = await page.locator('#main-content').boundingBox();
+    assert.ok(downloadBounds.y + downloadBounds.height <= mainBounds.y + mainBounds.height, 'The primary action must fit without scrolling.');
+    const title = await page.locator('#title').innerText();
+    await page.locator('#title').evaluate(element => { element.textContent = 'فيديو طويل العنوان لاختبار عرض سطرين داخل نافذة الإضافة مع بقاء زر التحميل ظاهرًا وسهل الاستخدام'; });
+    const longTitleAction = await page.locator('#download').boundingBox();
+    assert.ok(longTitleAction.y + longTitleAction.height <= mainBounds.y + mainBounds.height, 'A two-line title must not push the download button out of view.');
+    await page.locator('#title').evaluate((element, value) => { element.textContent = value; }, title);
+    await page.locator('body').screenshot({ path: path.join(artifacts, 'popup-ready.png'), animations: 'disabled' });
+    await page.locator('body').screenshot({ path: path.join(artifacts, 'popup-ready-dark.png'), animations: 'disabled' });
+    async function checkContrast() {
+      const values = await page.evaluate(() => {
+        function luminance(value) {
+          const rgb = value.match(/[\d.]+/g).slice(0, 3).map(Number).map(v => v / 255);
+          return rgb.map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4).reduce((total, v, i) => total + v * [.2126, .7152, .0722][i], 0);
+        }
+        function contrast(foreground, background) {
+          const values = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
+          return (values[0] + .05) / (values[1] + .05);
+        }
+        const body = getComputedStyle(document.body);
+        const action = getComputedStyle(document.getElementById('download'));
+        const label = getComputedStyle(document.querySelector('.field-label'));
+        const source = getComputedStyle(document.querySelector('.source'));
+        return { body: contrast(body.color, body.backgroundColor), action: contrast(action.color, action.backgroundColor), secondary: contrast(label.color, source.backgroundColor) };
+      });
+      for (const [name, ratio] of Object.entries(values)) assert.ok(ratio >= 4.5, name + ' contrast must be at least 4.5:1, got ' + ratio);
+    }
+    await checkContrast();
+    await page.getByRole('switch').click();
+    await page.locator('body').screenshot({ path: path.join(artifacts, 'popup-ready-light.png'), animations: 'disabled' });
+    await checkContrast();
+    await page.locator('#quality-more summary').click();
+    await page.locator('#quality').selectOption('360');
+    assert.equal(await page.locator('.quality-option input:checked').count(), 0);
+    await page.locator('#quality-more summary').click();
+    await page.locator('.quality-option').filter({ has: page.locator('input[value="480"]') }).click();
+    assert.equal(await page.locator('#quality').inputValue(), '480');
+    await page.locator('input[value="720"]').focus();
+    await page.keyboard.press('Space');
+    assert.equal(await page.locator('#quality').inputValue(), '720');
     await page.locator('#download').click();
     await page.locator('.job').waitFor();
     assert.equal(await page.evaluate(() => window.actions.find(action => action.action === 'download').choice), '720');
-    assert.match(await page.locator('.job-status').innerText(), /45%/);
+    assert.equal(await page.locator('#tab-downloads').getAttribute('aria-selected'), 'true');
+    assert.match(await page.locator('.job-percent').innerText(), /45%/);
     assert.equal(await page.locator('.job-destination').innerText(), 'D:\\الفيديوهات المختارة');
-    await page.screenshot({ path: path.join(artifacts, 'popup-downloading.png'), fullPage: true });
+    await page.locator('.cancel').focus();
+    await page.evaluate(() => window.progressJob(55));
+    assert.equal(await page.locator('.cancel').evaluate(element => element === document.activeElement), true, 'Progress updates must preserve the focused action.');
+    assert.equal(await page.locator('.job-percent').innerText(), '55%');
+    await page.screenshot({ path: path.join(artifacts, 'popup-downloading.png'), fullPage: true, animations: 'disabled' });
+    await page.getByRole('switch').click();
+    await page.screenshot({ path: path.join(artifacts, 'popup-downloads-dark.png'), animations: 'disabled' });
+    await page.locator('#tab-video').click();
     await page.locator('#choose-folder').click();
     await page.waitForFunction(() => document.getElementById('destination-path').value.startsWith('E:'));
     await page.evaluate(() => window.completeJob());
+    await page.locator('#tab-downloads').click();
     await page.locator('.open-job').click();
     assert.equal(await page.evaluate(() => window.actions.filter(action => action.action === 'openFolder').at(-1).jobId), 'job1');
     assert.equal(await page.locator('.job-destination').innerText(), 'D:\\الفيديوهات المختارة');
+    await page.locator('#tab-video').click();
     await page.locator('#download').click();
     await page.locator('.cancel').click();
     assert.match(await page.locator('.job-status').innerText(), /تم الإلغاء/);
+    await page.locator('#tab-video').click();
     await page.evaluate(() => { window.currentTab = { id: 1, url: 'https://www.facebook.com/reel/new-video' }; });
     await page.locator('#refresh').click();
     await page.waitForFunction(() => document.getElementById('site').textContent === 'www.facebook.com' && !document.getElementById('video').hidden);
@@ -163,6 +247,7 @@ async function main() {
     assert.equal(await page.locator('#choose-folder').isDisabled(), true);
     assert.equal(await page.locator('#folder').isDisabled(), true);
     assert.match(await page.locator('#helper-update').innerText(), /Update.cmd/);
+    await page.screenshot({ path: path.join(artifacts, 'popup-update-dark.png'), animations: 'disabled' });
     await page.evaluate(() => { window.bootstrapJobs = [{ id: 'active', status: 'downloading' }]; });
     await page.locator('#activate-update').click();
     await page.waitForFunction(() => document.getElementById('notice').textContent.includes('انتظر انتهاء'));
@@ -184,7 +269,7 @@ async function main() {
     await page.locator('#reconnect').evaluate(element => { element.closest('#setup').hidden = false; });
     await page.locator('#reconnect').click();
     await page.locator('#setup').waitFor({ state: 'visible' });
-    await page.waitForFunction(() => document.getElementById('connection').textContent === 'غير متصل');
+    await page.waitForFunction(() => document.getElementById('connection-label').textContent === 'غير متصل');
     assert.equal(await page.locator('#extension-id').inputValue(), 'abcdefghijklmnopabcdefghijklmnop');
     await page.screenshot({ path: path.join(artifacts, 'popup-setup.png'), fullPage: true });
     assert.deepEqual(errors, []);
@@ -203,6 +288,41 @@ async function main() {
     await page.screenshot({ path: path.join(artifacts, 'setup-guide.png'), fullPage: true });
     assert.deepEqual(errors, []);
     console.log('Installed setup guide, escaped Unicode paths, copy/fallback actions and narrow layout passed.');
+
+    await page.goto(base + '/popup.html');
+    await page.locator('#video').waitFor({ state: 'visible' });
+    if (await page.locator('html').getAttribute('data-theme') !== 'dark') await page.getByRole('switch').click();
+    await page.evaluate(() => localStorage.setItem('delay-theme', '1'));
+    await page.reload();
+    await page.waitForFunction(() => typeof window.releaseThemeRead === 'function');
+    await page.getByRole('switch').click();
+    await page.evaluate(() => { window.releaseThemeRead(); localStorage.removeItem('delay-theme'); });
+    await page.locator('#video').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('html').getAttribute('data-theme'), 'light', 'A late theme read must not overwrite a newer user choice.');
+
+    // Use the real extension storage, independent of the deterministic helper mock.
+    async function openThemePopup(browserContext) {
+      const popup = await browserContext.newPage();
+      await popup.addInitScript(() => { chrome.runtime.sendMessage = async () => ({ ok: false, error: 'Theme test without a native companion.' }); });
+      await popup.goto('chrome-extension://' + id + '/popup.html');
+      await popup.locator('#setup').waitFor({ state: 'visible' });
+      return popup;
+    }
+    let themePopup = await openThemePopup(context);
+    await themePopup.getByRole('switch').click();
+    assert.equal(await themePopup.locator('html').getAttribute('data-theme'), 'light');
+    await themePopup.waitForFunction(async () => (await chrome.storage.local.get('theme')).theme === 'light');
+    await themePopup.evaluate(() => localStorage.setItem('vidrush-theme', 'dark'));
+    await context.close();
+    context = await chromium.launchPersistentContext(profile, launchOptions);
+    themePopup = await openThemePopup(context);
+    assert.equal(await themePopup.locator('html').getAttribute('data-theme'), 'light');
+    await themePopup.getByRole('switch').click();
+    await themePopup.waitForFunction(async () => (await chrome.storage.local.get('theme')).theme === 'dark');
+    await themePopup.close();
+    themePopup = await openThemePopup(context);
+    assert.equal(await themePopup.locator('html').getAttribute('data-theme'), 'dark');
+    console.log('Theme choice persisted in real chrome.storage.local across popup reopening and browser restart.');
   } finally {
     if (server) await new Promise(resolve => server.close(resolve));
     await context.close();

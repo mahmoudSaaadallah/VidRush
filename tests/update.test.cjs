@@ -23,4 +23,6 @@ test('offline code update preserves configuration and binaries and installs fold
   assert.ok(fs.existsSync(path.join(installRoot, 'host', 'select-folder.ps1')));
   assert.ok(fs.existsSync(path.join(installRoot, 'host', 'open-folder.cjs')));
   assert.ok(fs.existsSync(path.join(installRoot, 'extension', 'popup.js')));
+  assert.ok(fs.existsSync(path.join(installRoot, 'extension', 'theme-init.js')));
+  assert.ok(fs.existsSync(path.join(installRoot, 'extension', 'icons', 'logo.svg')));
 });
