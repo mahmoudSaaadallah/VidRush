@@ -83,7 +83,7 @@ The guide is saved at `%LOCALAPPDATA%\VidRush\setup-guide.html`; double-click it
 
 1. Open an **individual video page** on a site supported by yt-dlp. Avoid a site's home page, search results, or a playlist page.
 2. Click the **VidRush** toolbar icon.
-3. Wait for the connection badge to show **`متصل محليًا`** (Connected locally), then wait for analysis to finish.
+3. Wait for the connection badge to show **`متصل`** (Connected), then wait for analysis to finish.
 4. Check the video title in the **`تحميل فيديو`** (Download video) tab. Choose a quality under **`الجودة`** (Quality). Use **`كل الجودات`** (All qualities), when shown, to see the full list.
 5. Under **`مكان الحفظ`** (Save location), check the displayed folder. To change it, click **`تغيير`** (Change), select your folder in Windows, then reopen VidRush if the popup closed. Your selection is saved automatically.
 6. Click **`تحميل الفيديو`** (Download video). The file is saved directly into the folder shown; no move is needed afterward.
