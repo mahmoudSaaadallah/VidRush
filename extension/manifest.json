@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "VidRush — Video Downloader",
+  "version": "0.1.0",
+  "description": "Choose a video quality and download with your local yt-dlp companion.",
+  "minimum_chrome_version": "120",
+  "permissions": [
+    "activeTab",
+    "nativeMessaging",
+    "storage"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Download with VidRush",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/16.png",
+      "48": "icons/48.png",
+      "128": "icons/128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/16.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqyVPLWZdOgj3xG8uq3ymw/1TZ9uT6QbffGU1PMbyFXZVegz0b/miqWuwBd3XtpzC/FTFoSFNyDm9TTbMbLi0AAjva8ary01zI+KLBBpw4l3cTmubO/ib6CgUH/Vayp/MjAWxGkhQPeLPsFluIcUFl5j36VpOL5JzjbGWG/YyJMpf4G4dAWJ3wbi/e3obfFAarsoMu6gKUhMLaMimaHjDCQM7z5fq5emEQ9mSV6wjtbxPxXTVVC8m6wKM+gxrryc4njBew/8p6zHJj4bExtmX7u3UVlqwJBpacZUe0QJwAIWTcxyUP4V9JfkOnxUXWuygMLMkXaWMLSuFcqUMtclvnQIDAQAB"
+}
