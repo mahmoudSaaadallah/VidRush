@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Finish setting up VidRush</title>
+  <style>
+    :root { color-scheme:dark; --bg:#0f172a; --card:#192134; --text:#f8fafc; --muted:#a6b3c8; --border:#334155; --accent:#f9a8d4; --blue:#2563eb; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:16px/1.65 "Segoe UI",Arial,sans-serif; }
+    main { max-width:760px; margin:56px auto; padding:0 24px 32px; }
+    .brand { color:var(--accent); font-weight:700; letter-spacing:1px; }
+    .badge { display:inline-block; color:#86efac; background:#153529; border:1px solid #286b4d; padding:3px 12px; border-radius:20px; font-size:13px; margin:28px 0 4px; }
+    h1 { font-size:clamp(28px,5vw,40px); line-height:1.2; letter-spacing:-1px; margin:12px 0; }
+    p { color:var(--muted); }
+    ol { list-style:none; padding:0; counter-reset:steps; margin:28px 0; display:grid; gap:12px; }
+    li { counter-increment:steps; position:relative; background:var(--card); border:1px solid var(--border); border-radius:12px; padding:22px 22px 22px 72px; }
+    li::before { content:counter(steps); position:absolute; left:22px; top:23px; width:30px; height:30px; border-radius:8px; background:#29364c; color:var(--accent); text-align:center; font-weight:700; }
+    h2 { font-size:17px; margin:0 0 4px; }
+    li p { margin:4px 0; font-size:14px; }
+    code { color:var(--text); overflow-wrap:anywhere; }
+    .path { display:block; width:100%; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:7px; padding:12px; font:13px/1.6 Consolas,monospace; margin:14px 0 10px; }
+    button { background:var(--blue); color:white; border:0; border-radius:7px; min-height:44px; padding:10px 18px; font:600 14px "Segoe UI",Arial,sans-serif; cursor:pointer; }
+    button:hover { background:#1d4ed8; }
+    button:focus-visible,input:focus-visible,a:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+    #copy-status { display:inline; margin-left:10px; font-size:13px; }
+    .foot { border-top:1px solid var(--border); padding-top:20px; font-size:13px; }
+    a { color:#93c5fd; }
+    @media(max-width:480px) { main { margin-top:24px; padding-inline:16px; } li { padding:18px 16px 18px 60px; } li::before { left:16px; top:18px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand">VIDRUSH / SETUP</div>
+    <span class="badge">Tools and companion installed</span>
+    <h1>One last step.<br>Enable VidRush in Chrome.</h1>
+    <p>All required tools are ready. Chrome needs you to add the extension yourself once. No commands, accounts, or programming knowledge are needed.</p>
+    <ol>
+      <li><h2>Switch to the Extensions tab</h2><p>Setup opened it beside this guide. If you cannot see it, type <code>chrome://extensions</code> in Chrome's address bar.</p><p>Chrome not installed? <a href="https://www.google.com/chrome/" target="_blank" rel="noopener noreferrer">Get Google Chrome</a> first, then open this guide in Chrome.</p></li>
+      <li><h2>Turn on Developer mode</h2><p>Use the switch at the top-right of the Extensions page.</p></li>
+      <li><h2>Click Load unpacked</h2><p>Copy this folder path, paste it into the folder dialog's address bar, press Enter, then click <strong>Select Folder</strong>.</p>
+        <input class="path" id="extension-path" aria-label="Installed extension folder" value="{{EXTENSION_PATH}}" readonly>
+        <button id="copy-path" type="button">Copy folder path</button><p id="copy-status" role="status" aria-live="polite"></p>
+      </li>
+      <li><h2>Pin VidRush and download a video</h2><p>Open Chrome's Extensions menu (the puzzle-piece button), pin VidRush, then open a video page and click its icon. Choose a quality and click the blue download button.</p></li>
+    </ol>
+    <p class="foot">Your videos will be saved to <code>{{DOWNLOAD_PATH}}</code>. Keep Chrome open while downloading. The extension has been copied to a permanent folder; you can move or remove the original project folder after activation.</p>
+    <p class="foot">Updating an older VidRush install? If Chrome still loads the extension from the original project folder, remove that old entry before loading the folder shown above. For later updates, reload VidRush on the Extensions page after rerunning Install.cmd.</p>
+  </main>
+  <script>
+    document.getElementById('copy-path').addEventListener('click', async () => {
+      const input = document.getElementById('extension-path');
+      const status = document.getElementById('copy-status');
+      try {
+        await navigator.clipboard.writeText(input.value);
+        status.textContent = 'Copied. Paste it in the folder dialog.';
+      } catch {
+        input.focus(); input.select();
+        status.textContent = 'Press Ctrl+C to copy the selected path.';
+      }
+    });
+  </script>
+</body>
+</html>
