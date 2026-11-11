@@ -1,64 +1,111 @@
 <!doctype html>
-<html lang="ar" dir="rtl">
+<html lang="ar" dir="rtl" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>VidRush</title>
+  <script src="theme-init.js"></script>
   <link rel="stylesheet" href="popup.css">
   <script src="popup.js" defer></script>
 </head>
 <body>
-  <header>
-    <a id="brand" href="#" aria-label="VidRush"><img src="icons/48.png" width="36" height="36" alt=""><span dir="ltr">VidRush<small>الفيديو، عندك.</small></span></a>
-    <span id="connection" class="badge">جارٍ الاتصال</span>
-  </header>
-  <main>
-    <div class="eyebrow">من الصفحة إلى جهازك</div>
-    <h1>اختار الجودة.<br><span>وخد الفيديو معاك.</span></h1>
-    <p class="intro">تحميل محلي باستخدام yt-dlp، من غير نسخ الروابط.</p>
+  <svg class="sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="m10 13 4-4m-6 6-1 1a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0m2 2 1-1a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0" transform="translate(1 1)"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 7a7 7 0 0 1 11-1l3 3M4 15l3 3a7 7 0 0 0 11-1"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 16v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></symbol>
+    <symbol id="i-film" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 3v18M17 3v18M3 8h4m-4 8h4m10-8h4m-4 8h4m-11-7 4 3-4 3Z"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14A8 8 0 0 1 10 4a8 8 0 1 0 10 10Z"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v1"/></symbol>
+  </svg>
+  <div class="app-shell">
+    <span id="action-status" class="sr-only" role="status" aria-live="polite"></span>
+    <header class="app-header">
+      <div id="brand"><img src="icons/logo.svg" width="32" height="32" alt=""><span dir="ltr">VidRush</span></div>
+      <span id="connection" class="badge"><span class="status-dot" aria-hidden="true"></span><span id="connection-label">جارٍ الاتصال</span></span>
+    </header>
 
-    <section class="source" aria-label="صفحة الفيديو الحالية">
-      <span class="source-icon" aria-hidden="true">↗</span>
-      <div><span class="field-label">الصفحة الحالية</span><div id="site" dir="ltr">—</div></div>
-      <button id="refresh" class="icon-button" title="إعادة فحص الصفحة" aria-label="إعادة فحص الصفحة" disabled>↻</button>
-    </section>
+    <div class="theme-row">
+      <span class="theme-label"><svg class="icon" aria-hidden="true"><use id="theme-icon" href="#i-moon"/></svg><span id="theme-label">الوضع الداكن</span></span>
+      <button id="theme-toggle" type="button" role="switch" aria-checked="true" aria-labelledby="theme-label"><span class="switch-track"><span class="switch-thumb"></span></span></button>
+    </div>
 
-    <div id="notice" class="notice" role="status" aria-live="polite">جارٍ الاتصال بالبرنامج المساعد…</div>
-    <div id="helper-update" class="notice error" role="status" hidden>البرنامج المساعد المثبّت قديم. شغّل Update.cmd من نسخة المشروع الجديدة، ثم اضغط «تفعيل التحديث». انتظر انتهاء أي تحميل أولًا.<button id="activate-update" class="secondary">تفعيل التحديث</button></div>
-    <section id="setup" class="setup" hidden>
-      <strong>تثبيت البرنامج المساعد</strong>
-      <ol><li>افتح مجلد المشروع وشغّل <bdi>Install.cmd</bdi>.</li><li>انتظر ظهور رسالة نجاح التثبيت.</li><li>اضغط «إعادة الاتصال» هنا.</li></ol>
-      <label for="extension-id">معرّف الإضافة للدعم</label><input id="extension-id" readonly dir="ltr">
-      <button id="reconnect" class="secondary">إعادة الاتصال</button>
-    </section>
+    <nav class="tabs" role="tablist" aria-label="أقسام VidRush">
+      <button id="tab-video" type="button" role="tab" aria-selected="true" aria-controls="panel-video">تحميل فيديو</button>
+      <button id="tab-downloads" type="button" role="tab" aria-selected="false" aria-controls="panel-downloads" tabindex="-1">التحميلات <span id="downloads-count" class="count" hidden>0</span></button>
+    </nav>
 
-    <section id="video" hidden>
-      <div class="video-heading"><span id="extractor" class="eyebrow"></span><span id="duration" class="meta" dir="ltr"></span></div>
-      <h2 id="title" dir="auto"></h2>
-      <label for="quality">جودة التحميل</label>
-      <select id="quality"></select>
-      <p id="format-note" class="meta">الصوت مضمّن. الأحجام المعروضة تقديرية.</p>
-      <div class="destination" id="destination">
-        <div class="destination-heading"><label for="destination-path">مكان الحفظ</label><button id="choose-folder" class="text-button" disabled>اختيار المجلد</button></div>
-        <input id="destination-path" readonly dir="ltr" aria-describedby="destination-hint">
-        <p id="destination-hint" class="meta">اختار المجلد في نافذة Windows، ثم افتح الإضافة مجددًا لو اتقفلت.</p>
-      </div>
-      <button id="download" class="primary"><span>تحميل الفيديو</span><span aria-hidden="true">↓</span></button>
-    </section>
+    <main id="main-content">
+      <div id="notice" class="notice" role="status" aria-live="polite">جارٍ الاتصال بالبرنامج المساعد…</div>
+      <section id="panel-video" role="tabpanel" aria-labelledby="tab-video">
+        <section class="source" aria-label="صفحة الفيديو الحالية">
+          <svg class="icon source-icon" aria-hidden="true"><use href="#i-link"/></svg>
+          <div class="source-copy"><span class="field-label">الصفحة الحالية</span><div id="site" dir="ltr">—</div></div>
+          <button id="refresh" class="outline-button" type="button" title="إعادة فحص الصفحة الحالية" aria-label="إعادة فحص الصفحة الحالية" disabled><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg><span>تحديث</span></button>
+        </section>
 
-    <section class="downloads" aria-labelledby="downloads-heading">
-      <div class="section-heading"><h2 id="downloads-heading">التحميلات</h2><button id="folder" class="text-button" disabled>فتح المجلد ↗</button></div>
-      <p id="empty" class="empty">تحميلاتك هتظهر هنا، وتكمل بعد إغلاق النافذة.</p>
-      <div id="jobs" aria-live="polite"></div>
-    </section>
-  </main>
-  <footer><span id="version">محرك yt-dlp</span><span>على جهازك مباشرة</span></footer>
+        <section id="helper-update" class="update-card" aria-labelledby="update-heading" hidden>
+          <div class="card-heading"><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><h2 id="update-heading">تحديث بسيط مطلوب</h2></div>
+          <p>حدّث البرنامج المساعد لتفعيل اختيار المجلد.</p>
+          <ol><li>شغّل <bdi>Update.cmd</bdi> من نسخة المشروع الجديدة.</li><li>ثم فعّل التحديث من الزر التالي.</li></ol>
+          <button id="activate-update" class="primary warning-button" type="button">تفعيل التحديث</button>
+          <p class="small-note">انتظر انتهاء التحميلات أولًا.</p>
+        </section>
+
+        <section id="setup" class="setup-card" aria-labelledby="setup-heading" hidden>
+          <div class="card-heading"><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><h2 id="setup-heading">البرنامج المساعد غير متصل</h2></div>
+          <ol><li>شغّل <bdi>Install.cmd</bdi> من مجلد المشروع.</li><li>انتظر نجاح التثبيت، ثم أعد الاتصال.</li></ol>
+          <button id="reconnect" class="primary" type="button">إعادة الاتصال</button>
+          <details class="support-details"><summary>معلومات الدعم</summary><label for="extension-id">معرّف الإضافة</label><input id="extension-id" readonly dir="ltr"></details>
+        </section>
+
+        <div id="video-placeholder" class="placeholder" hidden><svg class="icon" aria-hidden="true"><use href="#i-film"/></svg><p>افتح صفحة فيديو لعرض الجودات المتاحة.</p></div>
+
+        <section id="video" aria-label="خيارات الفيديو" hidden>
+          <div class="video-summary">
+            <span class="video-icon"><svg class="icon" aria-hidden="true"><use href="#i-film"/></svg></span>
+            <div class="video-copy"><h1 id="title" dir="auto"></h1><div class="video-meta"><span id="extractor"></span><span id="duration" dir="ltr"></span></div></div>
+          </div>
+
+          <fieldset class="quality-card">
+            <legend class="sr-only">جودة التحميل</legend>
+            <div class="section-heading"><span id="quality-heading" class="section-label">الجودة</span><details id="quality-more"><summary>كل الجودات</summary><label class="sr-only" for="quality">اختيار الجودة من القائمة الكاملة</label><select id="quality"></select></details></div>
+            <div id="quality-presets" class="quality-presets" role="radiogroup" aria-labelledby="quality-heading"></div>
+            <div class="quality-meta"><span id="quality-details" dir="ltr"></span><span>الصوت مضمّن</span></div>
+          </fieldset>
+
+          <div class="destination" id="destination">
+            <label class="section-label" for="destination-path">مكان الحفظ</label>
+            <div class="folder-row">
+              <svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg>
+              <input id="destination-path" readonly dir="ltr" aria-describedby="destination-hint">
+              <button id="choose-folder" class="text-button" type="button" aria-label="اختيار مجلد الحفظ" disabled>تغيير</button>
+            </div>
+            <p id="destination-hint" class="sr-only">اختار المجلد في نافذة Windows، ثم افتح الإضافة مجددًا لو اتقفلت.</p>
+          </div>
+
+          <button id="download" class="primary download-button" type="button" disabled><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg><span>تحميل الفيديو</span></button>
+        </section>
+      </section>
+
+      <section id="panel-downloads" role="tabpanel" aria-labelledby="tab-downloads" hidden>
+        <div class="section-heading downloads-heading"><h1>التحميلات</h1><button id="folder" class="outline-button" type="button" disabled><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg><span>فتح المجلد</span></button></div>
+        <div id="empty" class="empty"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg><h2>لسه مفيش تحميلات</h2><p>اختار فيديو من تبويب تحميل فيديو، وابدأ التحميل.</p><button id="back-to-video" class="outline-button" type="button">اختار فيديو</button></div>
+        <div id="jobs" aria-label="قائمة التحميلات"></div>
+      </section>
+    </main>
+    <footer><span>التحميل يكمل بعد إغلاق النافذة</span><span id="version" dir="ltr">yt-dlp</span></footer>
+  </div>
+
   <template id="job-template">
     <article class="job">
-      <div class="job-top"><strong class="job-title" dir="auto"></strong><button class="cancel text-button">إلغاء</button></div>
-      <div class="job-detail"><span class="job-quality" dir="ltr"></span><span class="job-status"></span></div>
+      <div class="job-heading"><svg class="icon job-icon" aria-hidden="true"><use href="#i-film"/></svg><div class="job-copy"><strong class="job-title" dir="auto"></strong><span class="job-quality" dir="ltr"></span></div></div>
+      <div class="job-progress-label"><span class="job-status" role="status"></span><span class="job-percent" dir="ltr"></span></div>
       <progress max="100" value="0" aria-label="تقدّم التحميل"></progress>
-      <div class="job-location"><span class="job-destination" dir="ltr"></span><button class="open-job text-button" hidden>فتح المجلد ↗</button></div>
+      <div class="job-transfer"><span class="job-speed" dir="ltr"></span><span class="job-eta"></span><button class="cancel text-button" type="button">إلغاء</button></div>
+      <div class="job-location"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg><span class="job-destination" dir="ltr"></span><button class="open-job text-button" type="button" hidden>فتح المجلد</button></div>
       <p class="job-error" dir="auto" hidden></p>
     </article>
   </template>

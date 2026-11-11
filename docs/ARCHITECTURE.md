@@ -2,7 +2,9 @@
 
 ## Components
 
-- `extension/popup.*`: Arabic, right-to-left UI. Queries the active tab, lists qualities, and observes session storage for job updates. Untrusted video titles and errors are rendered as text.
+- `extension/popup.*`: Arabic, right-to-left UI with Video and Downloads tabs. Queries the active tab, lists exact source-format choices as quick resolution buttons and a full select, and observes session storage for job updates. Job cards are keyed by job ID so progress updates preserve keyboard focus. Untrusted video titles and errors are rendered as text.
+- `extension/theme-init.js`: Applies a locally cached theme before the stylesheet loads. The popup then reads the authoritative `theme` preference from `chrome.storage.local`; a revision guard prevents a delayed read from overwriting a newer click. Only `light` and `dark` are accepted, with dark as the initial default. The preference survives browser restarts; jobs remain session-scoped. Theme changes require no native connection or additional permission.
+- `scripts/generate-assets.cjs`: Reproducibly generates the approved Rush V logo as a local SVG and antialiased PNG toolbar icons without external assets or rendering dependencies. The manifest's public key and extension ID remain unchanged.
 - `extension/background.js`: Manifest V3 service worker. Owns one `connectNative` port, correlates request IDs, caches up to eight video analyses, and maintains up to 30 session-scoped jobs. Closing the popup does not close the native connection.
 - `host/index.cjs`: Validates the caller origin, reads configuration, and handles Chrome's length-prefixed UTF-8 JSON protocol.
 - `host/companion.cjs`: Runs yt-dlp as a subprocess without a shell, limits concurrent analyses/downloads, parses progress, and cancels process trees on Windows.

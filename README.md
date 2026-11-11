@@ -6,7 +6,9 @@ VidRush consists of a Chrome extension and a local companion powered by [yt-dlp]
 
 > **Important:** VidRush supports many websites through yt-dlp. It does **not** work on every website, and it does **not** bypass DRM. This first version downloads individual videos, not playlists or live streams. The extension interface is in Arabic; this guide is in English.
 
-<img src="docs/popup.png" width="400" alt="VidRush's Arabic popup showing a video title, selectable quality, and download button">
+<img src="docs/popup.png" width="300" alt="VidRush's redesigned Arabic popup in dark mode"> <img src="docs/popup-light.png" width="300" alt="The same VidRush popup in light mode">
+
+The Rush V toolbar icon opens a compact interface with separate **Download video** and **Downloads** tabs. Both themes provide the same controls.
 
 *Example interface with illustrative video details and file sizes.*
 
@@ -81,14 +83,18 @@ The guide is saved at `%LOCALAPPDATA%\VidRush\setup-guide.html`; double-click it
 
 1. Open an **individual video page** on a site supported by yt-dlp. Avoid a site's home page, search results, or a playlist page.
 2. Click the **VidRush** toolbar icon.
-3. Wait for the connection badge to show **`متصل محليًا`** (Connected locally), then wait for analysis to finish.
-4. Check the video title. Select a quality under **`جودة التحميل`** (Download quality).
-5. Under **`مكان الحفظ`** (Save location), check the displayed folder. To change it, click **`اختيار المجلد`** (Choose folder), select your folder in Windows, then reopen VidRush if the popup closed. Your selection is saved automatically.
+3. Wait for the connection badge to show **`متصل`** (Connected), then wait for analysis to finish.
+4. Check the video title in the **`تحميل فيديو`** (Download video) tab. Choose a quality under **`الجودة`** (Quality). Use **`كل الجودات`** (All qualities), when shown, to see the full list.
+5. Under **`مكان الحفظ`** (Save location), check the displayed folder. To change it, click **`تغيير`** (Change), select your folder in Windows, then reopen VidRush if the popup closed. Your selection is saved automatically.
 6. Click **`تحميل الفيديو`** (Download video). The file is saved directly into the folder shown; no move is needed afterward.
-7. Follow the download under **`التحميلات`** (Downloads). You can close the popup; keep Chrome open.
+7. The **`التحميلات`** (Downloads) tab opens automatically and shows progress. You can switch between the two tabs or close the popup; keep Chrome open.
 8. When the status says **`اكتمل التحميل`** (Completed), click **`فتح المجلد`** (Open folder) on that download to open its actual saved location.
 
-The circular-arrow button reads the active tab's current URL each time you click it. After navigating to another video or changing pages within the same tab, press it to update the displayed site and quality choices. A delayed result from the previous page cannot replace the newer result. Use **`إلغاء`** (Cancel) beside an active download to stop it. Up to **two downloads** can run at once.
+The **`تحديث`** (Refresh) circular-arrow button reads the active tab's current URL each time you click it. After navigating to another video or changing pages within the same tab, press it to update the displayed site and quality choices. A delayed result from the previous page cannot replace the newer result. Use **`إلغاء`** (Cancel) beside an active download to stop it. Up to **two downloads** can run at once.
+
+### Switch between dark and light mode
+
+Click the switch beside **`الوضع الداكن`** (Dark mode) near the top of the popup. On means dark; off means light. VidRush starts in dark mode and remembers your choice automatically, including after you close the popup or restart Chrome. No companion connection is needed to change the theme.
 
 ### Where files are saved
 
@@ -98,24 +104,25 @@ By default, files go into **`VidRush` inside your Windows Downloads folder**, in
 C:\Users\<your-user>\Downloads\VidRush
 ```
 
-The extension shows the current destination under **Save location**. Each download also keeps its own destination. The top Open folder button opens the current default folder; a completed download's Open folder button opens that video's folder. Downloads are written by the companion, so they do **not** appear in Chrome's built-in download manager.
+The extension shows the current destination under **Save location**. Each download also keeps its own destination. In the **Downloads** tab, the Open folder button above the list opens the current default folder; a completed download's Open folder button opens that video's folder. Downloads are written by the companion, so they do **not** appear in Chrome's built-in download manager.
 
 To change the destination:
 
 1. Open VidRush on a video page and wait for the quality choices.
-2. Click **`اختيار المجلد`** (Choose folder) below the quality list.
+2. Click **`تغيير`** (Change) beside the save location below the quality choices.
 3. Choose an existing folder, or create a new one using the Windows folder dialog, and confirm.
 4. Reopen the extension if it closed while the Windows dialog had focus. Check the displayed path, then start the download.
 
 The folder is remembered across Chrome restarts and becomes the default for new downloads. Cancelling leaves the previous setting unchanged. Existing files and downloads already in progress stay in their original folders. If the folder cannot be written to or the setting cannot be saved, VidRush reports an error and keeps the previous destination. No configuration-file editing is required.
 
-Reinstalling preserves your selected folder. **After updating to this feature, close Chrome, rerun `Install.cmd`, and reload the extension** so the companion includes the native folder picker.
+Reinstalling preserves your selected folder. When updating an existing installation, run **`Update.cmd`** from the latest project copy, finish active downloads, then reload VidRush at `chrome://extensions` so both the interface and companion use the updated code.
 
 File names include the source video ID and format IDs, so different qualities of the same video can be saved separately. Downloading the same choice again does not overwrite an existing file.
 
 ### Understanding quality choices and progress
 
 - Only qualities actually reported by the website are shown. VidRush does not upscale videos.
+- Up to three resolution buttons provide quick choices. **All qualities**, when shown, contains every available choice, including alternatives with the same resolution. The details below the buttons describe the selected choice's container, frame rate, and approximate size when available.
 - Every listed choice includes audio. Silent-only options are excluded in this version.
 - **MP4** is offered when a suitable source combination is available. Other combinations may produce **MKV**. VidRush does not re-encode the video to force MP4.
 - An approximate size appears when the website provides enough information; otherwise no size is shown.
@@ -238,7 +245,7 @@ npx playwright install chromium
 npm run test:browser
 ```
 
-`npm ci` installs development dependencies only; end users do not need it to run VidRush. The browser tests check the real extension loads and exercise the popup with deterministic companion responses. They do not download third-party videos.
+`npm ci` installs development dependencies only; end users do not need it to run VidRush. The browser tests check the real extension loads and exercise the popup with deterministic companion responses. They cover both themes, saved theme choice across a real browser restart, keyboard controls, compact layout, contrast, quality selection, current-page refresh, folder actions, and download progress/cancellation. They do not download third-party videos.
 
 On Windows, test setup without relying on the system Node.js runtime:
 
