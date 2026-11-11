@@ -10,10 +10,13 @@ const { Companion } = require('../host/companion.cjs');
 const { buildMedia } = require('../host/media.cjs');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-function harness() {
+function harness(options = {}) {
   const events = [], calls = [];
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vidrush-test-'));
-  const companion = new Companion({ ytdlpPath: 'yt-dlp.exe', downloadDir: directory, ffmpegPath: directory }, message => {
+  const config = { ytdlpPath: 'yt-dlp.exe', downloadDir: directory, ffmpegPath: directory };
+  const configPath = path.join(directory, 'config.json');
+  fs.writeFileSync(configPath, JSON.stringify(config));
+  const companion = new Companion(config, message => {
     JSON.stringify(message); // Real protocol serialization must succeed even while a process is attached.
     events.push(message);
   }, (executable, args, options) => {
@@ -24,8 +27,8 @@ function harness() {
     child.unref = () => {};
     calls.push({ executable, args, options, child });
     return child;
-  });
-  return { companion, events, calls, cleanup: () => fs.rmSync(directory, { recursive: true, force: true }) };
+  }, { configPath, ...options });
+  return { companion, events, calls, directory, configPath, cleanup: () => fs.rmSync(directory, { recursive: true, force: true }) };
 }
 
 test('download responds with serializable job and emits progress and completion', async t => {
@@ -80,4 +83,52 @@ test('cancellation cannot later become a completed download', async t => {
   assert.equal(job.status, 'cancelled');
   assert.equal(h.events.at(-1).data.status, 'cancelled');
   assert.equal(h.events.at(-1).data.child, undefined);
+});
+
+test('changing the default folder persists it while active jobs keep their original destination', async t => {
+  let selected;
+  const h = harness({ selectFolder: async () => selected }); t.after(h.cleanup);
+  const oldDirectory = h.directory;
+  selected = path.join(h.directory, 'new مجلد'); fs.mkdirSync(selected);
+  const media = buildMedia({ title: 'Test', formats: [{ format_id: 'test', url: 'https://test.test/v', height: 720, ext: 'mp4', vcodec: 'avc1', acodec: 'aac' }] }, true);
+  h.companion.media.set(media.token, { ...media, url: 'https://test.test/v' });
+  await h.companion.handle({ id: '1', action: 'download', token: media.token, choice: media.options[0].id, downloadDir: 'untrusted-override' });
+  const first = h.events.find(event => event.id === '1').data;
+  await h.companion.handle({ id: '2', action: 'chooseFolder', downloadDir: 'untrusted-override' });
+  assert.equal(h.events.at(-1).data.downloadDir, selected);
+  assert.equal(JSON.parse(fs.readFileSync(h.configPath, 'utf8')).downloadDir, selected);
+  const process = h.calls[0].child;
+  process.stdout.write(`VIDRUSH_FILE:${JSON.stringify(path.join(oldDirectory, 'video.mp4'))}\n`);
+  process.emit('close', 0); await tick();
+  assert.equal(h.events.at(-1).job.filename, 'video.mp4');
+  assert.equal(h.events.at(-1).job.downloadDir, oldDirectory);
+  await h.companion.handle({ id: '3', action: 'download', token: media.token, choice: media.options[0].id });
+  assert.equal(h.calls[1].args[h.calls[1].args.indexOf('--paths') + 1], selected);
+  await h.companion.handle({ id: '4', action: 'openFolder', jobId: first.id });
+  assert.deepEqual(h.calls[2].args, [oldDirectory]);
+});
+
+test('folder cancellation and errors preserve the configured destination', async t => {
+  let selected = null;
+  const h = harness({ selectFolder: async () => selected }); t.after(h.cleanup);
+  const before = fs.readFileSync(h.configPath, 'utf8');
+  await h.companion.handle({ id: '1', action: 'chooseFolder' });
+  assert.equal(h.events.at(-1).data.cancelled, true);
+  selected = path.join(h.directory, 'missing');
+  await h.companion.handle({ id: '2', action: 'chooseFolder' });
+  assert.equal(h.events.at(-1).ok, false);
+  assert.equal(h.companion.config.downloadDir, h.directory);
+  assert.equal(fs.readFileSync(h.configPath, 'utf8'), before);
+  assert.equal(h.companion.choosingFolder, false);
+});
+
+test('a second folder picker is rejected while the first remains open', async t => {
+  let finish;
+  const h = harness({ selectFolder: () => new Promise(resolve => { finish = resolve; }) }); t.after(h.cleanup);
+  const first = h.companion.handle({ id: '1', action: 'chooseFolder' });
+  await h.companion.handle({ id: '2', action: 'chooseFolder' });
+  assert.equal(h.events.at(-1).ok, false);
+  assert.match(h.events.at(-1).error, /already open/);
+  finish(null); await first;
+  assert.equal(h.events.at(-1).data.cancelled, true);
 });

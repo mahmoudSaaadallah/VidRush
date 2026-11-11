@@ -153,7 +153,7 @@ async function install() {
     const nodeLicense = path.join(path.dirname(process.execPath), 'LICENSE');
     if (fs.existsSync(nodeLicense)) fs.copyFileSync(nodeLicense, path.join(runtime, 'LICENSE'));
     for (const file of fs.readdirSync(path.join(root, 'host'))) {
-      if (file.endsWith('.cjs')) fs.copyFileSync(path.join(root, 'host', file), path.join(host, file));
+      if (/\.(cjs|ps1)$/.test(file)) fs.copyFileSync(path.join(root, 'host', file), path.join(host, file));
     }
     // Read the Windows Downloads known folder, including relocated/OneDrive folders.
     const downloads = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
