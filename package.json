@@ -7,7 +7,8 @@
     "test": "node --test tests/*.test.cjs",
     "check": "node scripts/check.cjs",
     "test:browser": "node scripts/browser-test.cjs",
-    "test:native": "node scripts/native-test.cjs"
+    "test:native": "node scripts/native-test.cjs",
+    "test:bootstrap": "node scripts/bootstrap-test.cjs"
   },
   "engines": { "node": ">=22" },
   "devDependencies": { "playwright": "^1.56.1" }
