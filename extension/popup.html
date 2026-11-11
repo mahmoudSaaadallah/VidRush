@@ -29,6 +29,7 @@
 
     <div class="theme-row">
       <span class="theme-label"><svg class="icon" aria-hidden="true"><use id="theme-icon" href="#i-moon"/></svg><span id="theme-label">الوضع الداكن</span></span>
+      <button id="discovery-settings" class="text-button" type="button" aria-haspopup="dialog">الفحص الشامل</button>
       <button id="theme-toggle" type="button" role="switch" aria-checked="true" aria-labelledby="theme-label"><span class="switch-track"><span class="switch-thumb"></span></span></button>
     </div>
 
@@ -68,16 +69,18 @@
         </div>
 
         <section id="video" aria-label="خيارات الفيديو" hidden>
+          <div id="source-picker" class="source-picker" hidden><label for="video-source">الفيديو المكتشف</label><select id="video-source" aria-label="اختيار الفيديو المكتشف"></select></div>
           <div class="video-summary">
             <span class="video-icon"><svg class="icon" aria-hidden="true"><use href="#i-film"/></svg></span>
             <div class="video-copy"><h1 id="title" dir="auto"></h1><div class="video-meta"><span id="extractor"></span><span id="duration" dir="ltr"></span></div></div>
           </div>
+          <p id="browser-note" class="small-note" hidden>التحميل عبر المتصفح: سيب صفحة الفيديو مفتوحة لحد ما التحميل يخلص.</p>
 
           <fieldset class="quality-card">
             <legend class="sr-only">جودة التحميل</legend>
             <div class="section-heading"><span id="quality-heading" class="section-label">الجودة</span><details id="quality-more"><summary>كل الجودات</summary><label class="sr-only" for="quality">اختيار الجودة من القائمة الكاملة</label><select id="quality"></select></details></div>
             <div id="quality-presets" class="quality-presets" role="radiogroup" aria-labelledby="quality-heading"></div>
-            <div class="quality-meta"><span id="quality-details" dir="ltr"></span><span>الصوت مضمّن</span></div>
+            <div class="quality-meta"><span id="quality-details" dir="ltr"></span><span id="audio-note">الصوت مضمّن</span></div>
           </fieldset>
 
           <div class="destination" id="destination">
@@ -102,6 +105,18 @@
     </main>
     <footer><span>التحميل يكمل بعد إغلاق النافذة</span><span id="version" dir="ltr">yt-dlp</span></footer>
   </div>
+
+  <dialog id="discovery-dialog" aria-labelledby="discovery-title">
+    <div class="section-heading"><h2 id="discovery-title">الفحص الشامل</h2><button id="close-discovery" class="text-button" type="button" aria-label="إغلاق إعدادات الفحص">إغلاق</button></div>
+    <p>يكتشف روابط الفيديو أثناء التشغيل، من غير قائمة أسماء للمشغّلات.</p>
+    <p>التفعيل يطلب من Chrome الوصول إلى مواقع الويب. الفحص يلتقط روابط الفيديو في التبويب اللي بتختاره فقط، لمدة ١٠ دقائق. لا ينسخ كلمات السر أو كوكيز الحساب.</p>
+    <p id="capture-status" role="status">جارٍ قراءة حالة الفحص…</p>
+    <button id="enable-discovery" class="primary" type="button">تفعيل الفحص الشامل</button>
+    <button id="start-discovery" class="primary" type="button" hidden>فحص التبويب الحالي</button>
+    <button id="stop-discovery" class="outline-button" type="button" hidden>إيقاف فحص التبويب</button>
+    <button id="disable-discovery" class="text-button" type="button" hidden>تعطيل الفحص الشامل وإزالة الصلاحية</button>
+    <p class="small-note">بعد التفعيل شغّل الفيديو أو غيّر الجودة، ثم اضغط تحديث في VidRush. مش كل طرق البث أو المحتوى المحمي مدعومين.</p>
+  </dialog>
 
   <template id="job-template">
     <article class="job">
