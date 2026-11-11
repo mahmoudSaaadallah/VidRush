@@ -35,6 +35,15 @@ button:focus-visible,a:focus-visible,select:focus-visible,input:focus-visible { 
 label { display:block; font-size:12px; color:var(--text); margin-bottom:7px; }
 select { width:100%; min-height:48px; padding:10px; border:1px solid var(--border); border-radius:9px; background:var(--card); color:var(--text); direction:ltr; }
 #format-note { margin:8px 0 18px; font-size:11px; }
+.has-video main > .eyebrow,.has-video main > h1,.has-video main > .intro { display:none; }
+.destination { margin-bottom:18px; padding:10px 12px; background:var(--card); border:1px solid var(--border); border-radius:9px; }
+.destination-heading { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+.destination-heading label { margin:0; }
+#destination-path { width:100%; min-width:0; border:1px solid var(--border); border-radius:6px; background:var(--bg); padding:8px; font:12px/1.6 "Segoe UI",Tahoma,Arial,sans-serif; color:var(--text); }
+#destination-hint { font-size:10px; margin:8px 0 2px; }
+.job-location { display:flex; align-items:center; gap:8px; margin-top:6px; }
+.job-destination { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--muted); font-size:10px; }
+.open-job { flex-shrink:0; }
 .primary,.secondary { width:100%; min-height:48px; border:0; border-radius:9px; padding:10px 16px; color:white; font-weight:600; }
 .primary { display:flex; justify-content:space-between; align-items:center; background:var(--blue); font-size:15px; }
 .primary:hover:enabled { background:#1d4ed8; }

@@ -75,3 +75,21 @@ test('browser restart preserves finished history and invalidates interrupted dow
   assert.equal(h.stored.jobs[0].status, 'failed');
   assert.equal(h.stored.jobs[1].status, 'completed');
 });
+
+test('folder selection survives popup lifetime and stale bootstrap replies cannot undo it', async () => {
+  const h = harness();
+  const bootstrap = h.api.handle({ action: 'bootstrap' });
+  await tick();
+  const selection = h.api.handle({ action: 'chooseFolder' });
+  await tick();
+  assert.equal(h.stored.destination.choosingFolder, true);
+  h.respond(h.sent[1], { downloadDir: 'D:\\Chosen videos', cancelled: false });
+  await selection;
+  h.respond(h.sent[0], { version: 'test', downloadDir: 'C:\\Old videos' });
+  await tick();
+  h.respond(h.sent[2], []);
+  const result = await bootstrap;
+  assert.equal(h.stored.destination.downloadDir, 'D:\\Chosen videos');
+  assert.equal(h.stored.destination.choosingFolder, false);
+  assert.equal(result.companion.downloadDir, 'D:\\Chosen videos');
+});
