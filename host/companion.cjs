@@ -5,7 +5,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { createInterface } = require('node:readline');
-const { validateUrl, buildMedia, publicMedia, baseArgs, downloadArgs } = require('./media.cjs');
+const { validateUrl, buildMedia, publicMedia, baseArgs, downloadArgs, refererArgs, safeError } = require('./media.cjs');
 const { selectFolder, saveDownloadDirectory } = require('./folders.cjs');
 const { openFolder } = require('./open-folder.cjs');
 
@@ -69,7 +69,7 @@ class Companion {
       if (action === 'ping') {
         const version = (await this.run(['--version'], { timeout: 15000 })).trim();
         data = { version, ffmpeg: !!this.config.ffmpegPath, downloadDir: this.config.downloadDir, choosingFolder: this.choosingFolder,
-          protocolVersion: 2, capabilities: { folderPicker: true, openFolder: true } };
+          protocolVersion: 3, capabilities: { folderPicker: true, openFolder: true, pageSources: true } };
       } else if (action === 'chooseFolder') {
         if (this.choosingFolder) throw new Error('A folder picker is already open. Finish or cancel it first.');
         this.choosingFolder = true;
@@ -84,11 +84,17 @@ class Companion {
       } else if (action === 'inspect') {
         if (this.inspections >= 2) throw new Error('Video analysis is already running. Wait a moment and retry.');
         const url = validateUrl(message.url);
+        const headers = refererArgs(message.referer);
         this.inspections++;
         try {
-          const raw = await this.run([...baseArgs(this.config), '--skip-download', '--dump-single-json', '--', url]);
-          const media = buildMedia(JSON.parse(raw), !!this.config.ffmpegPath);
-          this.media.set(media.token, { ...media, url });
+          const raw = await this.run([...baseArgs(this.config), ...headers, '--skip-download', '--dump-single-json', '--', url]);
+          let info = JSON.parse(raw);
+          // Generic extractors wrap a single embedded video in a playlist result.
+          // Do not expand real playlists, unresolved entries, or multiple videos.
+          if (info.entries?.length === 1 && info.entries[0]?.formats) info = info.entries[0];
+          const media = buildMedia(info, !!this.config.ffmpegPath);
+          if (message.referer && typeof message.title === 'string' && message.title.trim()) media.title = message.title.trim().slice(0, 300);
+          this.media.set(media.token, { ...media, url, referer: message.referer });
           if (this.media.size > 8) this.media.delete(this.media.keys().next().value);
           data = publicMedia(media);
         } finally { this.inspections--; }
@@ -107,7 +113,7 @@ class Companion {
           if (!old) break;
           this.jobs.delete(old.id);
         }
-        this.startJob(job, media.url, choice);
+        this.startJob(job, media.url, choice, media.referer);
         data = this.publicJob(job);
       } else if (action === 'cancel') {
         const job = this.jobs.get(message.jobId);
@@ -129,7 +135,7 @@ class Companion {
       } else throw new Error('Unknown companion action.');
       this.emit({ id, ok: true, data });
     } catch (error) {
-      this.emit({ id, ok: false, error: String(error.message || error).slice(-3000) });
+      this.emit({ id, ok: false, error: safeError(error.message || error).slice(-3000) });
     }
   }
 
@@ -140,7 +146,7 @@ class Companion {
 
   update(job) { this.emit({ event: 'job', job: this.publicJob(job) }); }
 
-  startJob(job, url, choice) {
+  startJob(job, url, choice, referer) {
     job.downloadDir ||= this.config.downloadDir;
     const onLine = line => {
       if (!['downloading', 'processing'].includes(job.status)) return;
@@ -162,7 +168,7 @@ class Companion {
         } catch { /* Completion still works if the extractor omits the filename. */ }
       }
     };
-    const task = this.run(downloadArgs({ ...this.config, downloadDir: job.downloadDir }, url, choice), { timeout: 0, onLine });
+    const task = this.run(downloadArgs({ ...this.config, downloadDir: job.downloadDir }, url, choice, referer), { timeout: 0, onLine });
     job.child = onLine.child;
     task.then(() => {
       if (job.status === 'cancelled') return;
@@ -171,7 +177,7 @@ class Companion {
       this.update(job);
     }).catch(error => {
       if (job.status === 'cancelled') return;
-      job.status = 'failed'; job.error = String(error.message).slice(-2000);
+      job.status = 'failed'; job.error = safeError(error.message).slice(-2000);
       this.update(job);
     });
   }
