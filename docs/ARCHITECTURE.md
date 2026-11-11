@@ -7,6 +7,7 @@
 - `host/index.cjs`: Validates the caller origin, reads configuration, and handles Chrome's length-prefixed UTF-8 JSON protocol.
 - `host/companion.cjs`: Runs yt-dlp as a subprocess without a shell, limits concurrent analyses/downloads, parses progress, and cancels process trees on Windows.
 - `host/media.cjs`: Validates web URLs and builds exact source-format choices. Private selectors remain in the companion; the UI receives opaque choice IDs.
+- `host/folders.cjs` / `host/select-folder.ps1`: Opens a Windows folder dialog in an STA PowerShell process, checks the selected folder is writable, and atomically saves the default destination. Only the trusted local dialog returns a path; the extension cannot pass arbitrary output paths.
 - `scripts/install.cjs`: Derives the stable extension ID, verifies upstream release hashes, installs a local runtime and tools, and registers the native host for the current Windows user.
 - `Install.cmd` / `scripts/bootstrap.ps1`: The entry point works before Node.js is installed. It reuses a compatible runtime or downloads a matching official LTS Windows ZIP, verifies SHA-256, and starts the installer. A mutex prevents overlapping setup windows. No global Node.js installation or PATH changes are required.
 - `scripts/setup.cjs` / `scripts/setup-guide.html`: Copies the extension to `%LOCALAPPDATA%\VidRush\extension` and generates a local activation guide with escaped paths. Chrome opens its Extensions page beside the guide when found in standard install locations. The user enables Developer mode and loads the installed folder; setup does not change browser policies or profiles.
@@ -34,7 +35,9 @@ sequenceDiagram
 
 ## Boundaries and lifecycle
 
-The helper only accepts `ping`, `inspect`, `download`, `cancel`, `status`, and `openFolder`. The extension cannot submit arbitrary command-line arguments, shell commands, selectors, or output paths. yt-dlp configuration and external plugin directories are ignored. HTTP(S) URLs are separated from options using `--`.
+The helper only accepts `ping`, `inspect`, `download`, `cancel`, `status`, `chooseFolder`, and `openFolder`. The extension cannot submit arbitrary command-line arguments, shell commands, selectors, or output paths. yt-dlp configuration and external plugin directories are ignored. HTTP(S) URLs are separated from options using `--`.
+
+Folder selection is owned by the service worker and companion, rather than the popup, because Chrome closes a popup when the native dialog receives focus. Selection has no fixed request deadline; it finishes when the user confirms or cancels. Session storage tracks the current folder and pending picker, and the companion persists the confirmed path in `config.json`. Cancelling and failed validation/persistence leave the old setting intact. Each job snapshots its destination when it starts; subsequent folder changes do not redirect an active job or its completion-path validation. Per-job Open folder actions resolve that snapshot by job ID in the companion.
 
 The helper rejects DRM formats and selections without audio. Separate tracks are combined with FFmpeg; compatible MP4/M4A combinations produce MP4 and other combinations produce MKV, without transcoding. Reported size is shown only when both track sizes are known.
 

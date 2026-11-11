@@ -23,6 +23,7 @@ VidRush consists of a Chrome extension and a local companion powered by [yt-dlp]
 
 - Analyze the video page currently open in Chrome.
 - Choose from available resolutions, frame rates, and output containers.
+- Choose a download folder with the Windows folder picker; your choice is remembered.
 - Download video **with audio**, including formats that require merging.
 - Follow progress, cancel a download, and open the download folder.
 - Close the extension popup while downloads continue. **Keep Chrome running.**
@@ -82,30 +83,33 @@ The guide is saved at `%LOCALAPPDATA%\VidRush\setup-guide.html`; double-click it
 2. Click the **VidRush** toolbar icon.
 3. Wait for the connection badge to show **`متصل محليًا`** (Connected locally), then wait for analysis to finish.
 4. Check the video title. Select a quality under **`جودة التحميل`** (Download quality).
-5. Click **`تحميل الفيديو`** (Download video).
-6. Follow the download under **`التحميلات`** (Downloads). You can close the popup; keep Chrome open.
-7. When the status says **`اكتمل التحميل`** (Completed), click **`فتح المجلد`** (Open folder).
+5. Under **`مكان الحفظ`** (Save location), check the displayed folder. To change it, click **`اختيار المجلد`** (Choose folder), select your folder in Windows, then reopen VidRush if the popup closed. Your selection is saved automatically.
+6. Click **`تحميل الفيديو`** (Download video). The file is saved directly into the folder shown; no move is needed afterward.
+7. Follow the download under **`التحميلات`** (Downloads). You can close the popup; keep Chrome open.
+8. When the status says **`اكتمل التحميل`** (Completed), click **`فتح المجلد`** (Open folder) on that download to open its actual saved location.
 
 The circular-arrow button re-analyzes the current page. Use **`إلغاء`** (Cancel) beside an active download to stop it. Up to **two downloads** can run at once.
 
 ### Where files are saved
 
-Files go into **`VidRush` inside your Windows Downloads folder**, including a Downloads folder you relocated in Windows. For a standard account this is:
+By default, files go into **`VidRush` inside your Windows Downloads folder**, including a Downloads folder you relocated in Windows. For a standard account this is:
 
 ```text
 C:\Users\<your-user>\Downloads\VidRush
 ```
 
-The installer prints the exact destination, and the extension's Open folder button opens it. Downloads are written by the companion, so they do **not** appear in Chrome's built-in download manager.
+The extension shows the current destination under **Save location**. Each download also keeps its own destination. The top Open folder button opens the current default folder; a completed download's Open folder button opens that video's folder. Downloads are written by the companion, so they do **not** appear in Chrome's built-in download manager.
 
 To change the destination:
 
-1. Close Chrome so the companion stops.
-2. Open `%LOCALAPPDATA%\VidRush\config.json` in a text editor.
-3. Change `downloadDir` to an absolute folder path. In JSON, use double backslashes, for example `"D:\\My Videos"`.
-4. Save the file and reopen Chrome.
+1. Open VidRush on a video page and wait for the quality choices.
+2. Click **`اختيار المجلد`** (Choose folder) below the quality list.
+3. Choose an existing folder, or create a new one using the Windows folder dialog, and confirm.
+4. Reopen the extension if it closed while the Windows dialog had focus. Check the displayed path, then start the download.
 
-Reinstalling preserves your existing `downloadDir` setting.
+The folder is remembered across Chrome restarts and becomes the default for new downloads. Cancelling leaves the previous setting unchanged. Existing files and downloads already in progress stay in their original folders. If the folder cannot be written to or the setting cannot be saved, VidRush reports an error and keeps the previous destination. No configuration-file editing is required.
+
+Reinstalling preserves your selected folder. **After updating to this feature, close Chrome, rerun `Install.cmd`, and reload the extension** so the companion includes the native folder picker.
 
 File names include the source video ID and format IDs, so different qualities of the same video can be saved separately. Downloading the same choice again does not overwrite an existing file.
 
@@ -170,6 +174,10 @@ If you customized `downloadDir` to point inside the companion installation folde
 | Analysis times out | Retry on the individual video's page. Analysis has a 90-second limit. Check the connection and update the companion. |
 | Download fails with a site error | The original yt-dlp error appears in the download card. Update the companion. Authentication and anti-bot restrictions may still prevent downloading. |
 | Quality list is old or selection expired | Press the circular-arrow button to analyze the page again. |
+| Popup closes when choosing a folder | Finish or cancel the Windows dialog, then click VidRush again. The background connection retains your selection. |
+| Folder picker is already open | Finish or cancel the existing Windows folder dialog before starting another selection. |
+| Choosing a folder reports an unknown action | Close Chrome, rerun `Install.cmd`, reopen Chrome and reload VidRush. Both the extension and companion must be updated. |
+| A folder cannot be saved or written to | Choose a writable folder on an available drive, check its permissions and free space, and retry. The previous folder remains selected if saving fails. |
 | Download percentage restarts | Separate audio and video tracks have their own progress. Wait until the final status is Completed. |
 | No download appears in Chrome's manager | This is expected. Use VidRush's Open folder button; the companion saves files directly. |
 | Files stop after closing Chrome | Keep Chrome running during downloads. Re-analyze and retry after reopening it. |
@@ -235,7 +243,7 @@ To run an additional end-to-end native test on Windows **after installing the co
 npm run test:native
 ```
 
-This generates an original test video using FFmpeg, serves it on localhost, and sends real framed messages to the companion to analyze and download it with yt-dlp. Temporary files are isolated from your regular download folder.
+This generates an original test video using FFmpeg, serves it on localhost, and sends real framed messages to the companion to analyze and download it with yt-dlp. It also persists an injected folder selection, restarts the companion, and verifies that the actual files land in that Unicode folder. The graphical folder picker is mocked in this automated test. Temporary files are isolated from your regular download folder.
 
 To additionally check that Chrome can launch the **registered** native companion:
 
