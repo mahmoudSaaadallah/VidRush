@@ -141,7 +141,7 @@ Changing the page URL, replacing the video element, changing its source/declared
 
 The cache keeps up to **eight recent tabs** in memory during the current companion connection. It is not a permanent download-link history and is not saved to disk. Closing a tab, restarting Chrome/the companion, or reloading the extension clears its usable selections. If a selection is evicted, a browser-only file catalogue disappears, or the player identity cannot be verified, VidRush safely analyzes again. Hidden changes inside a private player API may still require Refresh.
 
-Existing users can run **`Update.cmd`**, finish active downloads, and reload VidRush at `chrome://extensions`. Confirm **v0.2.4** in the footer. Updating the companion enables the new HLS track checks.
+Existing users can run **`Update.cmd`**, finish active downloads, and reload VidRush at `chrome://extensions`. Confirm **v0.2.5** in the footer. Updating enables Brightcove and embedded player discovery with complete audio and video track combination.
 
 ### Embedded players and signed-in lessons
 
