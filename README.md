@@ -141,7 +141,7 @@ Changing the page URL, replacing the video element, changing its source/declared
 
 The cache keeps up to **eight recent tabs** in memory during the current companion connection. It is not a permanent download-link history and is not saved to disk. Closing a tab, restarting Chrome/the companion, or reloading the extension clears its usable selections. If a selection is evicted, a browser-only file catalogue disappears, or the player identity cannot be verified, VidRush safely analyzes again. Hidden changes inside a private player API may still require Refresh.
 
-Existing users can run **`Update.cmd`**, finish active downloads, and reload VidRush at `chrome://extensions`. Confirm **v0.2.9** in the footer. Updating enables universal DOM player discovery across modern SPA frameworks, Shadow DOM penetration, universal media attributes, and expanded manifest stream detection.
+Existing users can run **`Update.cmd`**, finish active downloads, and reload VidRush at `chrome://extensions`. Confirm **v0.3.0** in the footer. Updating enables progressive MediaSource Extensions (MSE) buffer fallback capture for complex streaming players, allowing in-memory video recovery when standard network streams are unavailable.
 
 ### Embedded players and signed-in lessons
 
@@ -155,7 +155,7 @@ If a video plays in Chrome but VidRush reports **Unsupported URL**, the page may
 
 <img src="docs/popup-player.png" width="300" alt="VidRush offering one-time automatic scanning setup for an embedded lesson">
 
-This helps with non-DRM players that expose a readable file or stream. VidRush does not sign you in or export browser cookies/passwords. A `blob:` address alone is not a downloadable file; the underlying media must be discoverable.
+This helps with non-DRM players that expose a readable file or stream. VidRush does not sign you in or export browser cookies/passwords. For players using `blob:` addresses with MediaSource Extensions (MSE), VidRush can progressively capture playback buffers directly from the browser memory and cleanly remux them.
 
 Saved website permissions remain managed by Chrome. Revoke the broad grant using **Comprehensive scan → Disable comprehensive scan and remove permission**, or change site access in Chrome.
 

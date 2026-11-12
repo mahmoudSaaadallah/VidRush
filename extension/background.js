@@ -300,11 +300,60 @@ async function inspectTab(tabId, url, scanOnly = false, entry) {
     }
   }
   if (protectedFrames.size || sourceError?.code === 'DRM_PROTECTED') throw new Error(protectedVideoMessage);
+  const hasBlob = main?.hasBlob || frames.some(frame => frame.result?.hasBlob);
+  if (browserTransfer && hasBlob) {
+    try {
+      const target = { tabId, frameIds: [0] };
+      const [probe] = await chrome.scripting.executeScript({
+        target,
+        world: 'MAIN',
+        func: browserFrameFile,
+        args: ['probe', { key: crypto.randomUUID(), allowMSE: true }]
+      });
+      if (probe?.result && !probe.result.error && probe.result.variants?.length) {
+        if (browserQualities) {
+          const media = await request('prepareBrowser', { metadata: probe.result });
+          if (media.options.length === probe.result.variants.length) {
+            browserSources.set(media.token, {
+              target: { tabId, ...(probe.documentId ? { documentIds: [probe.documentId] } : { frameIds: [0] }) },
+              url: 'mse://stream',
+              videoIndex: 0,
+              pageUrl: url,
+              catalogId: probe.result.catalogId,
+              choices: media.options.map((choice, variantIndex) => ({
+                id: choice.id,
+                variantIndex,
+                total: probe.result.variants[variantIndex].bytes
+              }))
+            });
+            if (browserSources.size > 8) browserSources.delete(browserSources.keys().next().value);
+            if ((await chrome.tabs.get(tabId)).url !== url) throw new Error('تغيّرت الصفحة أثناء الفحص. اضغط تحديث على الفيديو الجديد.');
+            return media;
+          }
+        }
+      } else {
+        await chrome.scripting.executeScript({
+          target,
+          world: 'MAIN',
+          func: browserFrameFile,
+          args: ['enableMSE', {}]
+        }).catch(() => {});
+      }
+    } catch {
+      // Graceful fallback
+    }
+  }
   const full = await scanStatus(tabId);
   const grants = await Promise.all(origins.map(origin => chrome.permissions.contains({ origins: [origin] })));
   const missingOrigins = origins.filter((_, index) => !grants[index]);
   if (!missingOrigins.length && (sourceError?.code === 'MISSING_MEDIA_TRACKS' || originalError?.code === 'MISSING_MEDIA_TRACKS')) throw new Error(missingTracksMessage);
-  const message = full.active ? 'الفحص الشامل شغال. أعد تشغيل الفيديو أو غيّر الجودة، ثم اضغط تحديث. لم يظهر بث MP4 أو HLS أو DASH قابل للتحميل حتى الآن؛ بعض المشغّلات تستخدم نقلًا خاصًا غير مدعوم.' : missingOrigins.length ? 'شغّل الفيديو داخل الموقع، وفعّل الفحص التلقائي مرة واحدة للسماح بالوصول للمشغّلات المضمّنة.' : 'لم يظهر رابط فيديو قابل للتحميل. شغّل الفيديو ثم اضغط تحديث، أو فعّل الفحص الشامل من أعلى النافذة. بعض المشغّلات والمحتوى المحمي غير مدعومين.';
+  const message = full.active
+    ? 'الفحص الشامل شغال. أعد تشغيل الفيديو أو غيّر الجودة، ثم اضغط تحديث. لم يظهر بث MP4 أو HLS أو DASH قابل للتحميل حتى الآن؛ بعض المشغّلات تستخدم نقلًا خاصًا غير مدعوم.'
+    : hasBlob && browserTransfer
+      ? 'لم يظهر رابط بث مباشر قابل للتحميل. تم تفعيل الالتقاط الاحتياطي من الذاكرة (MSE Fallback)؛ شغّل الفيديو لبضع ثوانٍ داخل الصفحة ثم اضغط تحديث.'
+      : missingOrigins.length
+        ? 'شغّل الفيديو داخل الموقع، وفعّل الفحص التلقائي مرة واحدة للسماح بالوصول للمشغّلات المضمّنة.'
+        : 'لم يظهر رابط فيديو قابل للتحميل. شغّل الفيديو ثم اضغط تحديث، أو فعّل الفحص الشامل من أعلى النافذة. بعض المشغّلات والمحتوى المحمي غير مدعومين.';
   const error = new Error(message + '\n' + (sourceError?.message || originalError?.message || ''));
   error.playerOrigins = missingOrigins;
   throw error;

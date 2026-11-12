@@ -57,3 +57,32 @@ test('browser qualities retain player labels and independent sizes with bounded 
   assert.throws(() => browserMedia({ variants: Array(17).fill({ ext: 'mp4', bytes: 20 }) }), /Invalid/);
   assert.throws(() => browserMedia({ variants: [{ ext: 'mp4', bytes: 20 }, { ext: 'mp4', bytes: Infinity }] }), /Invalid/);
 });
+
+test('MSE browser download remuxes fragmented stream with FFmpeg when available', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vidrush-mse-'));
+  const ftypBytes = Buffer.concat([Buffer.from('000000206674797069736f6d', 'hex'), Buffer.alloc(100)]);
+  const media = browserMedia({ ext: 'mp4', bytes: ftypBytes.length, height: 720, title: 'MSE Lesson', isMSE: true });
+  const job = { id: 'mse-job-1', title: media.title, status: 'downloading', downloadDir: root };
+  let remuxRan = false;
+  const mockRun = async args => {
+    remuxRan = true;
+    const inputFile = args[2];
+    const outputFile = args.at(-1);
+    fs.copyFileSync(inputFile, outputFile);
+  };
+  const transfer = new BrowserDownload(job, media.options[0], () => {}, '/mock/ffmpeg/bin', mockRun);
+  t.after(() => {
+    transfer.cancel();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  await transfer.chunk(0, ftypBytes.toString('base64'));
+  let verifiedFile = '';
+  await transfer.finish(async file => { verifiedFile = file; });
+
+  assert.equal(remuxRan, true);
+  assert.equal(job.status, 'completed');
+  assert.equal(verifiedFile.endsWith('.remux'), true);
+  assert.equal(fs.existsSync(transfer.file), true);
+  assert.equal(fs.existsSync(transfer.partial), false);
+});

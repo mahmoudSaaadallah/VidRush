@@ -22,11 +22,17 @@ function harness(initialJobs = [], options = {}) {
     tabs: { get: async id => ({ id, url: 'https://example.com/video' }), onRemoved: { addListener(fn) { callbacks.tabRemoved = fn; } }, onUpdated: { addListener(fn) { callbacks.tabUpdated = fn; } } },
     permissions: { contains: async () => options.full === true, onRemoved: { addListener(fn) { callbacks.revoked = fn; } } },
     webRequest: Object.fromEntries(['onBeforeRequest', 'onBeforeSendHeaders', 'onResponseStarted', 'onCompleted', 'onErrorOccurred'].map(name => [name, { addListener(fn) { callbacks[name] = fn; } }])),
-    scripting: { executeScript: async script => script.func.name === 'snapshotPlayerIdentity'
-      ? [{ frameId: script.target.frameIds?.[0] || 0, documentId: identity.documentId, result: identity.value }]
-      : [{ frameId: 0, result: { pageUrl: 'https://example.com/video', sources: [], playerOrigins: [], ...options.page } }, ...(options.frames || [])] },
+    scripting: { executeScript: async script => {
+      if (options.executeScript) {
+        const res = await options.executeScript(script, identity);
+        if (res !== undefined) return res;
+      }
+      return script.func.name === 'snapshotPlayerIdentity'
+        ? [{ frameId: script.target.frameIds?.[0] || 0, documentId: identity.documentId, result: identity.value }]
+        : [{ frameId: 0, result: { pageUrl: 'https://example.com/video', sources: [], playerOrigins: [], ...options.page } }, ...(options.frames || [])];
+    } },
   };
-  const context = vm.createContext({ chrome, setTimeout, clearTimeout, console, URL,
+  const context = vm.createContext({ chrome, setTimeout, clearTimeout, console, URL, crypto,
     importScripts: filename => vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'extension', filename), 'utf8'), context) });
   vm.runInContext(`${fs.readFileSync(path.join(__dirname, '..', 'extension', 'background.js'), 'utf8')}\nglobalThis.api = { handle };`, context);
   const respond = (message, data) => callbacks.message({ id: message.id, ok: true, data });
@@ -34,9 +40,9 @@ function harness(initialJobs = [], options = {}) {
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-async function bootstrap(h, pageSources = true, pairedStreams = true) {
+async function bootstrap(h, pageSources = true, pairedStreams = true, browserTransfer = false, browserQualities = false) {
   const operation = h.api.handle({ action: 'bootstrap' });
-  await tick(); h.respond(h.sent.at(-1), { capabilities: { pageSources, sourceContext: true, analysisCache: true, pairedStreams } });
+  await tick(); h.respond(h.sent.at(-1), { capabilities: { pageSources, sourceContext: true, analysisCache: true, pairedStreams, browserTransfer, browserQualities } });
   await tick(); h.respond(h.sent.at(-1), []);
   await operation;
 }
@@ -524,4 +530,142 @@ test('discoverPageMedia extracts media from universal data attributes and custom
   assert.equal(result.sources.some(s => s.url === 'https://player.vimeo.com/video/76979871'), true);
   assert.equal(result.sources.some(s => s.url === 'https://api.cdn.test/hls/master?token=xyz'), true);
   assert.equal(result.sources.some(s => s.url === 'https://api.cdn.test/stream?format=m3u8'), true);
+});
+
+test('fast path dominance: when network stream is available, MSE fallback is not called', async () => {
+  const streamUrl = 'https://cdn.example/hls/master.m3u8';
+  let mseProbeCalled = false;
+  const h = harness([], {
+    page: { hasBlob: true, sources: [{ url: streamUrl }] },
+    executeScript: async script => {
+      if (script.func.name === 'browserFrameFile' && script.args?.[1]?.allowMSE) {
+        mseProbeCalled = true;
+      }
+      return undefined;
+    }
+  });
+  await bootstrap(h, true, true, true, true);
+  const operation = h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video' });
+  await tick();
+  // Direct inspect fails, then source inspect is attempted
+  h.callbacks.message({ id: h.sent.at(-1).id, ok: false, error: 'Unsupported URL' });
+  await tick();
+  assert.equal(h.sent.at(-1).url, streamUrl);
+  h.respond(h.sent.at(-1), { token: 'fast-path-success', options: [] });
+  const media = await operation;
+  assert.equal(media.token, 'fast-path-success');
+  assert.equal(mseProbeCalled, false);
+});
+
+test('graceful MSE fallback: when standard network stream fails and page has blob player, MSE fallback captures stream', async () => {
+  let mseProbeCalled = false;
+  const h = harness([], {
+    page: { hasBlob: true, sources: [] },
+    executeScript: async script => {
+      if (script.func.name === 'browserFrameFile' && script.args?.[0] === 'probe' && script.args?.[1]?.allowMSE) {
+        mseProbeCalled = true;
+        return [{
+          frameId: 0,
+          result: {
+            catalogId: 'mse-cat-1',
+            variants: [{ ext: 'mp4', bytes: 5000000, height: 1080, label: 'MSE Stream · Browser', isMSE: true }],
+            title: 'Blob Streamed Course',
+            duration: 300
+          }
+        }];
+      }
+      return undefined;
+    }
+  });
+  await bootstrap(h, true, true, true, true);
+  const operation = h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video' });
+  await tick();
+  // Direct inspect fails
+  h.callbacks.message({ id: h.sent.at(-1).id, ok: false, error: 'Unsupported URL' });
+  await tick();
+  assert.equal(mseProbeCalled, true);
+  // Companion receives prepareBrowser
+  assert.equal(h.sent.at(-1).action, 'prepareBrowser');
+  assert.equal(h.sent.at(-1).metadata.catalogId, 'mse-cat-1');
+  h.respond(h.sent.at(-1), {
+    token: 'mse-token',
+    browser: true,
+    options: [{ id: 'opt-1', label: '1080p · MP4 · Browser' }]
+  });
+  const media = await operation;
+  assert.equal(media.token, 'mse-token');
+});
+
+test('browserFrameFile hooks MSE SourceBuffer, probes recorded chunks, and streams them via read', async () => {
+  const code = fs.readFileSync(path.join(__dirname, '..', 'extension', 'browser-transfer.js'), 'utf8');
+  class MockSourceBuffer {
+    appendBuffer(chunk) {
+      this.lastChunk = chunk;
+    }
+  }
+  class MockMediaSource {
+    addSourceBuffer(type) {
+      const sb = new MockSourceBuffer();
+      sb.type = type;
+      return sb;
+    }
+  }
+  const dom = {
+    document: {
+      title: 'Protected MSE Course Lesson',
+      querySelectorAll: sel => sel === 'video' ? [{
+        currentSrc: 'blob:https://example.com/mse-blob-uuid',
+        videoHeight: 1080,
+        duration: 120,
+        querySelectorAll: () => []
+      }] : []
+    },
+    location: { href: 'https://example.com/watch' },
+    URL,
+    crypto,
+    AbortController,
+    btoa: str => Buffer.from(str, 'binary').toString('base64'),
+    setTimeout,
+    clearTimeout,
+    MediaSource: MockMediaSource,
+    SourceBuffer: MockSourceBuffer,
+  };
+  dom.window = dom;
+  const context = vm.createContext(dom);
+  vm.runInContext(code, context);
+
+  // 1. Enable MSE capture
+  const enableRes = await vm.runInContext('browserFrameFile("enableMSE", {})', context);
+  assert.equal(enableRes.enabled, true);
+
+  // 2. Simulate video player appending fMP4 chunks
+  const ftypHeader = Buffer.from('000000206674797069736f6d', 'hex');
+  const mediaChunk = Buffer.concat([ftypHeader, Buffer.alloc(100, 7)]);
+  const appendCode = `
+    const sb = new window.SourceBuffer();
+    sb.appendBuffer(new Uint8Array(${JSON.stringify(Array.from(mediaChunk))}));
+  `;
+  vm.runInContext(appendCode, context);
+
+  // 3. Probe with allowMSE: true
+  const probeRes = await vm.runInContext('browserFrameFile("probe", { key: "test-probe-key", allowMSE: true })', context);
+  assert.equal(probeRes.ext, 'mp4');
+  assert.equal(probeRes.bytes, mediaChunk.length);
+  assert.equal(probeRes.height, 1080);
+  assert.equal(probeRes.variants[0].isMSE, true);
+  assert.equal(probeRes.title, 'Protected MSE Course Lesson');
+
+  // 4. Read the buffered chunks
+  const readRes = await vm.runInContext(`
+    browserFrameFile("read", {
+      key: "test-probe-key",
+      url: "blob:https://example.com/mse-blob-uuid",
+      total: ${mediaChunk.length},
+      catalogId: "${probeRes.catalogId}",
+      variantIndex: 0
+    })
+  `, context);
+  assert.equal(readRes.done, true);
+  const reconstructed = Buffer.from(readRes.chunks[0], 'base64');
+  assert.deepEqual(reconstructed, mediaChunk);
 });

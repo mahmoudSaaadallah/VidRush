@@ -90,10 +90,11 @@ class Companion {
     }));
   }
 
-  async verifySavedVideo(file) {
+  async verifySavedVideo(file, isMSE = false) {
     if (!this.config.ffmpegPath) return;
     const { video, audio } = await this.probeTracks(file);
-    if (!video || !audio) throw missingTracks();
+    if (!video && !audio) throw missingTracks();
+    if (!isMSE && (!video || !audio)) throw missingTracks();
   }
 
   async describeDownloadError(error, input) {
@@ -184,7 +185,7 @@ class Companion {
         try {
           if (action === 'browserChunk') data = await transfer.chunk(message.offset, message.data);
           else if (action === 'browserFinish') {
-            data = await transfer.finish(file => this.verifySavedVideo(file));
+            data = await transfer.finish(file => this.verifySavedVideo(file, transfer.choice?.isMSE));
             this.browserJobs.delete(message.jobId);
           }
           else { transfer.fail(String(message.error || 'The video page closed or the browser transfer stopped.')); this.browserJobs.delete(message.jobId); data = { stopped: true }; }
@@ -204,7 +205,7 @@ class Companion {
           if (!old) break;
           this.jobs.delete(old.id);
         }
-        if (media.browser) this.browserJobs.set(job.id, new BrowserDownload(job, choice, value => this.update(value)));
+        if (media.browser) this.browserJobs.set(job.id, new BrowserDownload(job, choice, value => this.update(value), this.config.ffmpegPath, (args, opts) => this.run(args, opts)));
         else this.startJob(job, media.url, choice, media.referer, media.context, media.pairedInfo);
         data = this.publicJob(job);
       } else if (action === 'cancel') {
