@@ -15,6 +15,7 @@ async function run(chromium, extensionPath) {
     res.setHeader('Content-Type', req.url.includes('.m3u8') ? 'application/vnd.apple.mpegurl' : 'text/html; charset=utf-8');
     const port = server.address().port;
     if (req.url.startsWith('/master.m3u8')) { res.end('#EXTM3U\n#EXT-X-ENDLIST'); return; }
+    if (req.url.startsWith('/opaque')) { res.setHeader('Content-Type', 'application/vnd.apple.mpegurl'); res.end('#EXTM3U\n#EXT-X-ENDLIST'); return; }
     if (req.url === '/player') {
       res.end('<video></video><script>fetch("/master.m3u8?token=ephemeral").then(response=>response.text()).then(()=>window.loaded=true)</script>'); return;
     }
@@ -45,7 +46,7 @@ async function run(chromium, extensionPath) {
     assert.ok(frames[0].result.sources.some(source => source.url.endsWith('/video.mp4')));
     // Model the additional host grant, then run the same shipped discovery code.
     await context.close();
-    manifest.host_permissions.push('http://localhost/*');
+    manifest.host_permissions = ['http://*/*', 'https://*/*'];
     fs.writeFileSync(manifestPath, JSON.stringify(manifest));
     context = await launch();
     worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
@@ -61,6 +62,19 @@ async function run(chromium, extensionPath) {
     assert.match(stream.url, /token=ephemeral/);
     assert.equal(stream.referer, `http://localhost:${server.address().port}/player`);
     assert.equal(frames[0].result.sources.some(source => source.url.includes('master.m3u8')), false, 'The parent cannot read the cross-origin performance buffer.');
+    const tabId = await worker.evaluate(async () => (await chrome.tabs.query({ active: true, currentWindow: true }))[0].id);
+    await worker.evaluate(({ tabId, url }) => handle({ action: 'startCapture', tabId, url }), { tabId, url });
+    await player.evaluate(async () => { await (await fetch('/opaque?signature=private')).text(); });
+    await page.waitForTimeout(100);
+    const network = await worker.evaluate(({ tabId, url }) => capture.read(tabId, url), { tabId, url });
+    assert.ok(network.some(source => source.kind === 'hls' && source.url.includes('/opaque?signature=private') && source.userAgent));
+    const other = await context.newPage(); await other.goto(url);
+    await other.evaluate(async () => { await (await fetch('/opaque?other-tab=1')).text(); });
+    assert.equal(await worker.evaluate(({ tabId, url }) => capture.read(tabId, url).some(source => source.url.includes('other-tab')), { tabId, url }), false);
+    await other.close();
+    const metadata = await worker.evaluate(() => chrome.storage.session.get('captureSession'));
+    assert.equal(JSON.stringify(metadata).includes('signature'), false);
+    assert.equal(metadata.captureSession.url, undefined);
     await page.route('https://**/*', route => route.abort());
     await page.evaluate(() => {
       document.querySelector('video').src = URL.createObjectURL(new Blob(['fixture'], { type: 'video/mp4' }));
@@ -68,7 +82,8 @@ async function run(chromium, extensionPath) {
     });
     frames = await scan(worker);
     const main = frames[0].result;
-    assert.deepEqual(main.playerOrigins, ['https://player.hotmart.com/*']);
+    assert.ok(main.playerOrigins.includes('https://player.hotmart.com/*'));
+    assert.ok(main.playerOrigins.includes('https://unrelated.test/*'), 'Frame discovery must not rely on player names.');
     assert.ok(main.sources.some(source => source.url === 'https://fast.wistia.net/embed/iframe/abcdefghij'));
     assert.ok(main.sources.every(source => /^https?:/.test(source.url) && !source.url.includes('signature=private')));
     await page.locator('video').evaluate(async video => {

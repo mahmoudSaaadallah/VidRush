@@ -28,7 +28,7 @@ async function main() {
     if (!worker) worker = await context.waitForEvent('serviceworker');
     const id = extensionId(JSON.parse(fs.readFileSync(path.join(extensionPath, 'manifest.json'), 'utf8')).key);
     assert.equal(new URL(worker.url()).host, id);
-    assert.deepEqual(await worker.evaluate(() => chrome.runtime.getManifest().permissions), ['activeTab', 'scripting', 'nativeMessaging', 'storage']);
+    assert.deepEqual(await worker.evaluate(() => chrome.runtime.getManifest().permissions), ['activeTab', 'scripting', 'webRequest', 'nativeMessaging', 'storage']);
     assert.equal(await worker.evaluate(() => chrome.runtime.getManifest().host_permissions), undefined);
     console.log(`Real extension loaded: ${id}`);
     if (process.argv.includes('--native')) {
@@ -59,6 +59,7 @@ async function main() {
       window.folderOutcome = 'selected';
       window.currentTab = { id: 1, url: 'https://example.com/watch?v=test' };
       window.bootstrapJobs = [];
+      window.captureState = { enabled: false, active: false, count: 0 };
       let selections = 0, jobNumber = 0, currentJob;
       const updateJobs = () => listeners.forEach(listener => listener({ jobs: { newValue: [currentJob] } }, 'session'));
       window.completeJob = () => { currentJob = { ...currentJob, status: 'completed', percent: 100 }; updateJobs(); };
@@ -69,6 +70,9 @@ async function main() {
           reload() { window.updateActivated = true; },
           async sendMessage(message) {
             window.actions.push(message);
+            if (message.action === 'captureStatus') return { ok: true, data: window.captureState };
+            if (message.action === 'startCapture') { window.captureState.active = true; return { ok: true, data: window.captureState }; }
+            if (message.action === 'stopCapture') { window.captureState.active = false; return { ok: true, data: window.captureState }; }
             if (window.testMode === 'missing') return { ok: false, error: 'تعذّر الاتصال بالبرنامج المساعد. شغّل Install.cmd ثم أعد المحاولة.' };
             if (message.action === 'bootstrap') return { ok: true, data: { companion: { version: 'test', ...window.destination,
               capabilities: window.testMode === 'legacy' ? undefined : { folderPicker: true, openFolder: true } }, jobs: window.bootstrapJobs } };
@@ -82,13 +86,17 @@ async function main() {
               listeners.forEach(listener => listener({ destination: { newValue: { ...window.destination } } }, 'session'));
               return { ok: true, data: { ...window.destination, cancelled: false } };
             }
-            if (message.action === 'analyze') {
+            if (message.action === 'analyze' || message.action === 'selectSource') {
               if (window.testMode === 'player' && !message.scanPlayer) return { ok: false, error: 'شغّل الفيديو ثم افحص المشغّل.', playerOrigins: ['https://player.hotmart.com/*'] };
               if (window.testMode === 'unsupported') return { ok: false, error: 'No downloadable video with audio was found.' };
               const slow = message.url.endsWith('/slow-video');
               if (slow) await new Promise(resolve => { window.releaseSlowAnalysis = resolve; });
               const title = slow ? 'Old delayed video' : message.url.endsWith('/latest-video') ? 'Latest video' : '<script>alert(1)</script> — فيديو تجريبي';
-              return { ok: true, data: { token: 'video', title, duration: 83, site: 'Test site', options: [
+              return { ok: true, data: { token: 'video', title, duration: 83, site: 'Test site',
+                browser: window.testMode === 'multiple' && message.sourceIndex === 1,
+                sourceIndex: message.sourceIndex || 0,
+                detectedSources: window.testMode === 'multiple' ? [{ index: 0, label: 'HLS · first.test' }, { index: 1, label: 'فيديو · second.test' }] : undefined,
+                options: [
                 { id: '1080', height: 1080, fps: 60, container: 'mp4', label: '1080p · 60 fps · MP4', bytes: 1024 ** 2 * 85 },
                 { id: '720', height: 720, fps: 30, container: 'mp4', label: '720p · MP4', bytes: 1024 ** 2 * 40 },
                 { id: '480', height: 480, fps: 30, container: 'mp4', label: '480p · MP4' },
@@ -109,8 +117,12 @@ async function main() {
         tabs: { query: async () => [{ ...window.currentTab }] },
         permissions: { request: async value => {
           window.requestedOrigins = value.origins;
+          if (value.origins.includes('https://*/*')) {
+            if (window.allowFull === true) window.captureState.enabled = true;
+            return window.allowFull === true;
+          }
           return window.allowPlayer === true;
-        } },
+        }, remove: async () => { window.captureState.enabled = false; return true; } },
         storage: {
           session: { get: async () => ({ jobs: [] }) },
           local: {
@@ -127,6 +139,24 @@ async function main() {
     });
     await page.goto(`${base}/popup.html`);
     await page.locator('#video').waitFor({ state: 'visible' });
+    await page.setViewportSize({ width: 400, height: 600 });
+    await page.locator('#discovery-settings').click();
+    await page.locator('#enable-discovery').click();
+    await page.waitForFunction(() => document.getElementById('capture-status').textContent.includes('لم يتم منح'));
+    await page.evaluate(() => { window.allowFull = true; });
+    await page.locator('#enable-discovery').click();
+    await page.locator('#stop-discovery').waitFor({ state: 'visible' });
+    assert.deepEqual(await page.evaluate(() => window.requestedOrigins), ['http://*/*', 'https://*/*']);
+    const dialogBounds = await page.locator('#discovery-dialog').boundingBox();
+    assert.ok(dialogBounds.y >= 0 && dialogBounds.y + dialogBounds.height <= 600, 'The permissions dialog must fit the real popup viewport.');
+    await page.locator('body').screenshot({ path: path.join(artifacts, 'popup-comprehensive.png'), animations: 'disabled' });
+    await page.locator('#stop-discovery').click();
+    await page.locator('#start-discovery').waitFor({ state: 'visible' });
+    await page.locator('#start-discovery').click();
+    await page.locator('#disable-discovery').click();
+    await page.locator('#enable-discovery').waitFor({ state: 'visible' });
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#discovery-settings').evaluate(element => element === document.activeElement), true);
     assert.equal(await page.locator('#quality option').count(), 4);
     assert.equal(await page.locator('.quality-option').count(), 3);
     assert.equal(await page.locator('#brand img').evaluate(element => element.complete && element.naturalWidth > 0), true);
@@ -282,6 +312,14 @@ async function main() {
     await page.locator('#video').waitFor({ state: 'visible' });
     assert.equal(await page.locator('#scan-player').isVisible(), false);
     assert.equal(await page.evaluate(() => window.actions.filter(action => action.action === 'analyze').at(-1).scanPlayer), true);
+    await page.evaluate(() => { window.testMode = 'multiple'; });
+    await page.locator('#refresh').click();
+    await page.locator('#source-picker').waitFor({ state: 'visible' });
+    await page.locator('#video-source').selectOption('1');
+    await page.locator('#browser-note').waitFor({ state: 'visible' });
+    assert.equal(await page.evaluate(() => window.actions.at(-1).action), 'selectSource');
+    assert.equal(await page.locator('#video-source').inputValue(), '1');
+    assert.match(await page.locator('#audio-note').innerText(), /حسب المصدر/);
     await page.evaluate(() => { window.testMode = 'missing'; });
     // Reconnect through the same initialization path used by the real popup.
     await page.locator('#reconnect').evaluate(element => { element.closest('#setup').hidden = false; });
@@ -343,6 +381,7 @@ async function main() {
     console.log('Theme choice persisted in real chrome.storage.local across popup reopening and browser restart.');
     await context.close();
     await require('./discovery-browser-test.cjs').run(chromium, extensionPath);
+    await require('./browser-transfer-browser-test.cjs').run(chromium, extensionPath);
   } finally {
     if (server) await new Promise(resolve => server.close(resolve));
     await context.close();

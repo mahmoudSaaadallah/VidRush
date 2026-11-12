@@ -18,10 +18,12 @@ function harness(initialJobs = [], options = {}) {
       connectNative: () => port, onMessage: { addListener(fn) { callbacks.external = fn; } },
     },
     storage: { session: { get: async () => ({ jobs: initialJobs }), set: async data => Object.assign(stored, JSON.parse(JSON.stringify(data))) } },
-    tabs: { get: async id => ({ id, url: 'https://example.com/video' }), onRemoved: { addListener() {} } },
+    tabs: { get: async id => ({ id, url: 'https://example.com/video' }), onRemoved: { addListener(fn) { callbacks.tabRemoved = fn; } }, onUpdated: { addListener(fn) { callbacks.tabUpdated = fn; } } },
+    permissions: { contains: async () => options.full === true, onRemoved: { addListener(fn) { callbacks.revoked = fn; } } },
+    webRequest: Object.fromEntries(['onBeforeRequest', 'onBeforeSendHeaders', 'onResponseStarted', 'onCompleted', 'onErrorOccurred'].map(name => [name, { addListener(fn) { callbacks[name] = fn; } }])),
     scripting: { executeScript: async () => [{ frameId: 0, result: { pageUrl: 'https://example.com/video', sources: [], playerOrigins: [], ...options.page } }, ...(options.frames || [])] },
   };
-  const context = vm.createContext({ chrome, setTimeout, clearTimeout, console,
+  const context = vm.createContext({ chrome, setTimeout, clearTimeout, console, URL,
     importScripts: filename => vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'extension', filename), 'utf8'), context) });
   vm.runInContext(`${fs.readFileSync(path.join(__dirname, '..', 'extension', 'background.js'), 'utf8')}\nglobalThis.api = { handle };`, context);
   const respond = (message, data) => callbacks.message({ id: message.id, ok: true, data });
@@ -31,10 +33,34 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 
 async function bootstrap(h, pageSources = true) {
   const operation = h.api.handle({ action: 'bootstrap' });
-  await tick(); h.respond(h.sent.at(-1), { capabilities: { pageSources } });
+  await tick(); h.respond(h.sent.at(-1), { capabilities: { pageSources, sourceContext: true } });
   await tick(); h.respond(h.sent.at(-1), []);
   await operation;
 }
+
+test('full scan detects extensionless media on any host, binds source context, and stops without rearming', async () => {
+  const h = harness([], { full: true }); await bootstrap(h);
+  await h.api.handle({ action: 'startCapture', tabId: 1, url: 'https://example.com/video' });
+  const network = { requestId: 'network', tabId: 1, frameId: 7, method: 'GET', url: 'https://arbitrary-cdn.test/watch?token=private' };
+  h.callbacks.onBeforeRequest(network);
+  h.callbacks.onBeforeSendHeaders({ ...network, requestHeaders: [{ name: 'Referer', value: 'https://arbitrary-player.test/' }, { name: 'User-Agent', value: 'Browser UA' }] });
+  h.callbacks.onResponseStarted({ ...network, statusCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'application/dash+xml' }] });
+  await tick();
+  const operation = h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video', scanPlayer: true });
+  await tick();
+  assert.equal(h.sent.at(-1).url, network.url); assert.equal(h.sent.at(-1).userAgent, 'Browser UA');
+  h.respond(h.sent.at(-1), { token: 'detected', options: [] });
+  const media = await operation;
+  assert.equal(media.detectedSources[0].label.includes('private'), false);
+  assert.equal(media.sourceIndex, 0);
+  await h.api.handle({ action: 'stopCapture', tabId: 1 });
+  await assert.rejects(h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video', refresh: true, scanPlayer: true }), /لم يظهر/);
+  assert.equal((await h.api.handle({ action: 'captureStatus', tabId: 1 })).active, false);
+  h.callbacks.onBeforeRequest(network); h.callbacks.onResponseStarted({ ...network, statusCode: 200 }); await tick();
+  assert.equal((await h.api.handle({ action: 'captureStatus', tabId: 1 })).count, 0);
+  assert.equal(JSON.stringify(h.stored).includes('private'), false);
+  await assert.rejects(h.api.handle({ action: 'selectSource', tabId: 1, url: 'https://example.com/video', sourceIndex: 0 }), /انتهت/);
+});
 
 test('unsupported pages fall back to media discovered in an authorized player frame', async () => {
   const source = { url: 'https://cdn.example/master.m3u8?token=ephemeral', referer: 'https://player.hotmart.com/' };

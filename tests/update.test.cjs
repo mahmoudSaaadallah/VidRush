@@ -25,5 +25,8 @@ test('offline code update preserves configuration and binaries and installs fold
   assert.ok(fs.existsSync(path.join(installRoot, 'extension', 'popup.js')));
   assert.ok(fs.existsSync(path.join(installRoot, 'extension', 'theme-init.js')));
   assert.ok(fs.existsSync(path.join(installRoot, 'extension', 'discovery.js')));
+  assert.ok(fs.existsSync(path.join(installRoot, 'extension', 'capture.js')));
+  assert.ok(fs.existsSync(path.join(installRoot, 'extension', 'browser-transfer.js')));
+  assert.ok(fs.existsSync(path.join(installRoot, 'host', 'browser-download.cjs')));
   assert.ok(fs.existsSync(path.join(installRoot, 'extension', 'icons', 'logo.svg')));
 });

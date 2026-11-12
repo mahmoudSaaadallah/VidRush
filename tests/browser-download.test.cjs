@@ -8,11 +8,15 @@ const { browserMedia, BrowserDownload } = require('../host/browser-download.cjs'
 
 function fixture(t, bytes = Buffer.concat([Buffer.from('000000206674797069736f6d', 'hex'), Buffer.alloc(100)])) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vidrush-bytes-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const media = browserMedia({ ext: 'mp4', bytes: bytes.length, height: 720, title: '../CON:video', duration: 2 });
   const job = { id: 'unique-id', title: media.title, status: 'downloading', downloadDir: root };
   const transfer = new BrowserDownload(job, media, () => {});
-  t.after(() => transfer.cancel());
+  t.after(async () => {
+    transfer.cancel();
+    if (!transfer.stream.closed) await new Promise(resolve => transfer.stream.once('close', resolve));
+    const relative = path.relative(os.tmpdir(), root);
+    if (!relative.startsWith('..') && !path.isAbsolute(relative)) fs.rmSync(root, { recursive: true, force: true });
+  });
   return { root, media, job, transfer, bytes };
 }
 
