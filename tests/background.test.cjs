@@ -319,6 +319,18 @@ test('a declared Brightcove player is prioritized over single-track rendition st
   assert.equal((await operation).token, 'brightcove-complete');
 });
 
+test('a declared playlist or master manifest is prioritized over single-track rendition streams', async () => {
+  const playlist = 'https://stream.test/live/playlist.m3u8';
+  const rendition = 'https://stream.test/live/rendition.m3u8';
+  const h = harness([], { page: { sources: [{ url: rendition }, { url: playlist }] } });
+  await bootstrap(h);
+  const operation = h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video', scanPlayer: true });
+  await tick();
+  assert.equal(h.sent.at(-1).url, playlist);
+  h.respond(h.sent.at(-1), { token: 'playlist-complete' });
+  assert.equal((await operation).token, 'playlist-complete');
+});
+
 test('discoverPageMedia reconstructs Brightcove embed player URLs from DOM elements', () => {
   const code = fs.readFileSync(path.join(__dirname, '..', 'extension', 'discovery.js'), 'utf8');
   const dom = {
