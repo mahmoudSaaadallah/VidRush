@@ -5,7 +5,33 @@ function discoverPageMedia(protectionOnly = false) {
   const sources = new Map();
   const playerOrigins = new Set();
   const page = new URL(location.href);
-  const videos = [...document.querySelectorAll('video')].slice(0, 30);
+
+  // Traverse document and open shadow roots to discover all video elements
+  const videos = [];
+  const visitedRoots = new Set();
+  const queue = [document];
+  while (queue.length && videos.length < 30) {
+    const root = queue.shift();
+    if (!root || visitedRoots.has(root)) continue;
+    visitedRoots.add(root);
+    try {
+      const found = root.querySelectorAll ? root.querySelectorAll('video') : [];
+      for (const v of found) {
+        if (!videos.includes(v)) videos.push(v);
+        if (videos.length >= 30) break;
+      }
+    } catch {}
+    try {
+      const all = root.querySelectorAll ? root.querySelectorAll('*') : [];
+      for (const el of all) {
+        if (el?.shadowRoot && !visitedRoots.has(el.shadowRoot)) queue.push(el.shadowRoot);
+      }
+      for (const child of (root.children || [])) {
+        if (child?.shadowRoot && !visitedRoots.has(child.shadowRoot)) queue.push(child.shadowRoot);
+      }
+    } catch {}
+  }
+
   const hasDrm = videos.some(video => !!video.mediaKeys);
   if (protectionOnly) return { hasDrm };
   const hasBlob = videos.some(video => (video.currentSrc || video.src || '').startsWith('blob:'));
@@ -15,27 +41,55 @@ function discoverPageMedia(protectionOnly = false) {
     let url;
     try { url = new URL(value, document.baseURI); } catch { return; }
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return;
-    if (!mediaElement && !/\.(?:m3u8|mpd|mp4|webm|mov|m4v)(?:$|[?#])/i.test(url.href)) return;
+    if (!mediaElement) {
+      const isMedia = /\.(?:m3u8|mpd|mp4|webm|mov|m4v)(?:$|[?#])/i.test(url.href) ||
+        /(?:\/manifest\/(?:v\d+\/)?(?:hls|dash)\/|\/(?:hls|dash)\/(?:master|playlist|index|manifest)\b)/i.test(url.pathname) ||
+        /[?&](?:format|type|ext)=(?:m3u8|mpd|hls|dash)/i.test(url.search);
+      if (!isMedia) return;
+    }
     url.hash = '';
     const referer = url.origin === page.origin ? page.href.split('#')[0] : page.origin + '/';
     sources.set(url.href, { ...sources.get(url.href), url: url.href, referer, ...(Number.isInteger(videoIndex) ? { videoIndex } : {}) });
   }
   if (!hasDrm) {
+    const mediaAttrs = ['src', 'data-src', 'data-url', 'data-stream-url', 'data-hls-url', 'data-hls', 'data-manifest', 'data-video-url', 'data-mpd'];
     for (const [index, video] of videos.entries()) {
-      add(video.currentSrc, true, index); add(video.getAttribute('src'), true, index);
-      for (const source of video.querySelectorAll('source[src]')) add(source.src, true, index);
+      add(video.currentSrc, true, index);
+      for (const attr of mediaAttrs) add(video.getAttribute?.(attr), true, index);
+      for (const source of (video.querySelectorAll?.('source') || [])) {
+        add(source.src, true, index);
+        for (const attr of mediaAttrs) add(source.getAttribute?.(attr), true, index);
+      }
     }
+    // Check custom media players and universal embed containers
+    try {
+      for (const element of [...(document.querySelectorAll?.('video-js, media-player, mux-player, jw-player, [data-vimeo-id], [data-vimeo-url], [data-youtube-id]') || [])].slice(0, 30)) {
+        for (const attr of mediaAttrs) add(element.getAttribute?.(attr), true);
+        const vimeoId = element.getAttribute?.('data-vimeo-id');
+        if (/^\d{6,12}$/.test(vimeoId || '')) add(`https://player.vimeo.com/video/${vimeoId}`, true);
+        const vimeoUrl = element.getAttribute?.('data-vimeo-url');
+        if (typeof vimeoUrl === 'string' && /vimeo\.com\/\d+/.test(vimeoUrl)) add(vimeoUrl, true);
+        const ytId = element.getAttribute?.('data-youtube-id');
+        if (/^[a-zA-Z0-9_-]{11}$/.test(ytId || '')) add(`https://www.youtube.com/watch?v=${ytId}`, true);
+      }
+    } catch {}
+
     // MSE players expose blob: in <video>; their fetched HLS/DASH manifests remain
     // in this frame's Resource Timing buffer. No request bodies or cookies are read.
     const resources = performance.getEntriesByType('resource').slice(-500);
     for (const resource of resources.reverse()) add(resource.name);
-    for (const meta of document.querySelectorAll('meta[property="og:video"],meta[property="og:video:url"],meta[property="og:video:secure_url"]')) add(meta.content);
+    try {
+      for (const meta of (document.querySelectorAll?.('meta[property="og:video"],meta[property="og:video:url"],meta[property="og:video:secure_url"],meta[name="twitter:player:stream"],meta[property="twitter:player:stream"],meta[itemprop="contentUrl"],meta[itemprop="embedUrl"]') || [])) {
+        add(meta.content);
+      }
+    } catch {}
   }
-  for (const iframe of [...document.querySelectorAll('iframe[src]')].slice(0, 100)) {
+  for (const iframe of [...(document.querySelectorAll?.('iframe[src], iframe[data-src], iframe[data-url]') || [])].slice(0, 100)) {
     let url;
-    try { url = new URL(iframe.src); } catch { continue; }
+    const rawSrc = iframe.src || iframe.getAttribute?.('data-src') || iframe.getAttribute?.('data-url');
+    try { url = new URL(rawSrc, document.baseURI); } catch { continue; }
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) continue;
-    const box = iframe.getBoundingClientRect();
+    const box = iframe.getBoundingClientRect ? iframe.getBoundingClientRect() : { width: 300, height: 200 };
     if (box.width < 100 || box.height < 80) continue;
     if (url.origin !== page.origin) playerOrigins.add(url.origin + '/*');
     embeds.push({ url: url.href, referer: url.origin === page.origin ? page.href.split('#')[0] : page.origin + '/', area: box.width * box.height });
@@ -99,7 +153,7 @@ function discoverPageMedia(protectionOnly = false) {
       if (/^[a-z0-9]{10}$/.test(id || '')) add('https://fast.wistia.net/embed/iframe/' + id, true);
     }
   }
-  const rank = value => /master/i.test(value) ? 0 : /(?:brightcove\.net|wistia\.net)/i.test(value) ? 1 : /\.m3u8(?:$|[?#])/i.test(value) ? 2 : /\.mpd(?:$|[?#])/i.test(value) ? 3 : /\.(mp4|webm|mov|m4v)(?:$|[?#])/i.test(value) ? 4 : 5;
+  const rank = value => /(?:master|playlist|manifest)/i.test(value) ? 0 : /(?:brightcove\.net|wistia\.net|vimeo\.com|youtube\.com|dailymotion\.com)/i.test(value) ? 1 : /\.m3u8(?:$|[?#])/i.test(value) ? 2 : /\.mpd(?:$|[?#])/i.test(value) ? 3 : /\.(mp4|webm|mov|m4v)(?:$|[?#])/i.test(value) ? 4 : 5;
   return { pageUrl: page.href, title: document.title.slice(0, 300), hasDrm, hasBlob,
     sources: [...sources.values()].sort((a, b) => rank(a.url) - rank(b.url)).slice(0, 8),
     embeds: embeds.sort((a, b) => b.area - a.area).slice(0, 4), playerOrigins: [...playerOrigins].slice(0, 12) };

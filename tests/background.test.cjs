@@ -435,3 +435,93 @@ test('discoverPageMedia extracts Brightcove account and player from page scripts
   assert.ok(result.sources.some(s => s.url === expectedUrl));
   assert.equal(result.sources[0].referer, 'https://www.almentor.net/');
 });
+
+test('discoverPageMedia penetrates open Shadow DOM to find enclosed video elements', () => {
+  const code = fs.readFileSync(path.join(__dirname, '..', 'extension', 'discovery.js'), 'utf8');
+  const videoInShadow = {
+    tagName: 'VIDEO',
+    currentSrc: 'https://cdn.test/shadow-video.mp4',
+    getAttribute(name) { return name === 'src' ? 'https://cdn.test/shadow-video.mp4' : null; },
+    querySelectorAll() { return []; },
+  };
+  const shadowRoot = {
+    querySelectorAll(selector) {
+      if (selector === 'video') return [videoInShadow];
+      return [];
+    },
+    children: [],
+  };
+  const customElement = {
+    tagName: 'MEDIA-PLAYER',
+    shadowRoot,
+    getAttribute() { return null; },
+    querySelectorAll() { return []; },
+  };
+  const dom = {
+    location: { href: 'https://example.com/watch' },
+    document: {
+      title: 'Shadow Player Test',
+      baseURI: 'https://example.com/watch',
+      querySelectorAll(selector) {
+        if (selector === 'video') return [];
+        if (selector === '*') return [customElement];
+        return [];
+      },
+      children: [customElement],
+    },
+    performance: { getEntriesByType() { return []; } },
+    URL,
+  };
+  const context = vm.createContext(dom);
+  vm.runInContext(code, context);
+  const result = vm.runInContext('discoverPageMedia()', context);
+  assert.equal(result.sources.some(s => s.url === 'https://cdn.test/shadow-video.mp4'), true);
+});
+
+test('discoverPageMedia extracts media from universal data attributes and custom video containers', () => {
+  const code = fs.readFileSync(path.join(__dirname, '..', 'extension', 'discovery.js'), 'utf8');
+  const videoWithDataAttrs = {
+    tagName: 'VIDEO',
+    currentSrc: '',
+    getAttribute(name) {
+      if (name === 'data-stream-url') return 'https://cdn.test/universal-stream.m3u8';
+      return null;
+    },
+    querySelectorAll() { return []; },
+  };
+  const vimeoContainer = {
+    tagName: 'DIV',
+    getAttribute(name) {
+      if (name === 'data-vimeo-id') return '76979871';
+      return null;
+    },
+  };
+  const dom = {
+    location: { href: 'https://example.com/embedded' },
+    document: {
+      title: 'Universal Player Test',
+      baseURI: 'https://example.com/embedded',
+      querySelectorAll(selector) {
+        if (selector === 'video') return [videoWithDataAttrs];
+        if (selector.includes('data-vimeo-id')) return [vimeoContainer];
+        return [];
+      },
+    },
+    performance: {
+      getEntriesByType() {
+        return [
+          { name: 'https://api.cdn.test/hls/master?token=xyz' },
+          { name: 'https://api.cdn.test/stream?format=m3u8' },
+        ];
+      },
+    },
+    URL,
+  };
+  const context = vm.createContext(dom);
+  vm.runInContext(code, context);
+  const result = vm.runInContext('discoverPageMedia()', context);
+  assert.equal(result.sources.some(s => s.url === 'https://cdn.test/universal-stream.m3u8'), true);
+  assert.equal(result.sources.some(s => s.url === 'https://player.vimeo.com/video/76979871'), true);
+  assert.equal(result.sources.some(s => s.url === 'https://api.cdn.test/hls/master?token=xyz'), true);
+  assert.equal(result.sources.some(s => s.url === 'https://api.cdn.test/stream?format=m3u8'), true);
+});
