@@ -10,6 +10,7 @@ let nextId = 0;
 let pageSources = false;
 let sourceContext = false;
 let browserTransfer = false;
+let browserQualities = false;
 let capturePaused = false;
 const pending = new Map();
 const analyses = new Map();
@@ -67,11 +68,14 @@ async function inspectSource(tabId, url, set, index) {
     if (source.kind === 'embed' || source.kind !== 'file' && mediaKind(source.url) !== 'file') throw error;
     if (!browserTransfer) throw new Error('هذا الفيديو يحتاج النقل عبر المتصفح. شغّل Update.cmd ثم أعد تحميل الإضافة.');
     const target = { tabId, ...(source.documentId ? { documentIds: [source.documentId] } : { frameIds: [source.frameId || 0] }) };
-    const [probe] = await chrome.scripting.executeScript({ target, world: 'MAIN', func: browserFrameFile, args: ['probe', { key: '', url: source.url, videoIndex: source.videoIndex }] });
+    const [probe] = await chrome.scripting.executeScript({ target, world: 'MAIN', func: browserFrameFile, args: ['probe', { key: crypto.randomUUID(), url: source.url, videoIndex: source.videoIndex }] });
     if (!probe?.result) throw new Error('The video frame stopped responding. Start playback again and refresh.');
     if (probe.result.error) throw new Error(probe.result.error);
+    if (!browserQualities) throw new Error('عرض جودات المشغّل يحتاج البرنامج المساعد الجديد. شغّل Update.cmd ثم أعد تحميل الإضافة بعد انتهاء التحميلات.');
     media = await request('prepareBrowser', { metadata: probe.result });
-    browserSources.set(media.token, { target: { tabId, ...(probe.documentId ? { documentIds: [probe.documentId] } : { frameIds: [source.frameId || 0] }) }, url: source.url, videoIndex: source.videoIndex, pageUrl: url, total: probe.result.bytes });
+    if (media.options.length !== probe.result.variants.length) throw new Error('The companion returned mismatched browser qualities. Update the companion and retry.');
+    browserSources.set(media.token, { target: { tabId, ...(probe.documentId ? { documentIds: [probe.documentId] } : { frameIds: [source.frameId || 0] }) }, url: source.url, videoIndex: source.videoIndex, pageUrl: url, catalogId: probe.result.catalogId,
+      choices: media.options.map((choice, variantIndex) => ({ id: choice.id, variantIndex, total: probe.result.variants[variantIndex].bytes })) });
     if (browserSources.size > 8) browserSources.delete(browserSources.keys().next().value);
   }
   if ((await chrome.tabs.get(tabId)).url !== url || sourceChoices.get(tabId) !== set) throw new Error('تغيّرت الصفحة أثناء الفحص. اضغط تحديث على الفيديو الجديد.');
@@ -85,7 +89,7 @@ async function feedBrowserJob(job, source) {
   try {
     while (!task.stopped) {
       if ((await chrome.tabs.get(task.target.tabId)).url !== task.pageUrl) throw new Error('The video page changed during the browser download.');
-      const [response] = await chrome.scripting.executeScript({ target: task.target, world: 'MAIN', func: browserFrameFile, args: ['read', { key: task.key, url: task.url, total: task.total, videoIndex: task.videoIndex }] });
+      const [response] = await chrome.scripting.executeScript({ target: task.target, world: 'MAIN', func: browserFrameFile, args: ['read', { key: task.key, url: task.url, total: task.total, videoIndex: task.videoIndex, catalogId: task.catalogId, variantIndex: task.variantIndex }] });
       if (!response?.result) throw new Error('The video frame closed.');
       if (response.result.error) throw new Error(response.result.error);
       for (const data of response.result.chunks) {
@@ -204,9 +208,11 @@ async function inspectTab(tabId, url, scanOnly = false) {
     return media;
   }
   const full = await scanStatus(tabId);
-  const message = full.active ? 'الفحص الشامل شغال. أعد تشغيل الفيديو أو غيّر الجودة، ثم اضغط تحديث. لم يظهر بث MP4 أو HLS أو DASH قابل للتحميل حتى الآن؛ بعض المشغّلات تستخدم نقلًا خاصًا غير مدعوم.' : origins.length ? 'شغّل الفيديو داخل الموقع، ثم اضغط «فحص مشغّل الفيديو»، أو فعّل الفحص الشامل من أعلى النافذة.' : 'لم يظهر رابط فيديو قابل للتحميل. شغّل الفيديو ثم اضغط تحديث، أو فعّل الفحص الشامل من أعلى النافذة. بعض المشغّلات والمحتوى المحمي غير مدعومين.';
+  const grants = await Promise.all(origins.map(origin => chrome.permissions.contains({ origins: [origin] })));
+  const missingOrigins = origins.filter((_, index) => !grants[index]);
+  const message = full.active ? 'الفحص الشامل شغال. أعد تشغيل الفيديو أو غيّر الجودة، ثم اضغط تحديث. لم يظهر بث MP4 أو HLS أو DASH قابل للتحميل حتى الآن؛ بعض المشغّلات تستخدم نقلًا خاصًا غير مدعوم.' : missingOrigins.length ? 'شغّل الفيديو داخل الموقع، وفعّل الفحص التلقائي مرة واحدة للسماح بالوصول للمشغّلات المضمّنة.' : 'لم يظهر رابط فيديو قابل للتحميل. شغّل الفيديو ثم اضغط تحديث، أو فعّل الفحص الشامل من أعلى النافذة. بعض المشغّلات والمحتوى المحمي غير مدعومين.';
   const error = new Error(message + '\n' + (sourceError?.message || originalError?.message || ''));
-  error.playerOrigins = origins;
+  error.playerOrigins = missingOrigins;
   throw error;
 }
 
@@ -229,6 +235,7 @@ async function handle(message) {
     pageSources = companion.capabilities?.pageSources === true;
     sourceContext = companion.capabilities?.sourceContext === true;
     browserTransfer = companion.capabilities?.browserTransfer === true;
+    browserQualities = companion.capabilities?.browserQualities === true;
     if (epoch === destinationEpoch) await saveDestination({ downloadDir: companion.downloadDir, choosingFolder: !!companion.choosingFolder });
     const current = await request('status');
     for (const job of current) {
@@ -262,11 +269,13 @@ async function handle(message) {
   if (message.action === 'download') {
     const browserSource = browserSources.get(message.token);
     if (browserSource && (await chrome.tabs.get(browserSource.target.tabId)).url !== browserSource.pageUrl) throw new Error('تغيّرت الصفحة. أعد فحص الفيديو قبل التحميل.');
+    const browserChoice = browserSource?.choices.find(choice => choice.id === message.choice);
+    if (browserSource && !browserChoice) throw new Error('انتهى اختيار الجودة. أعد فحص الفيديو واختر الجودة مرة أخرى.');
     const job = await request('download', { token: message.token, choice: message.choice });
     const index = jobs.findIndex(item => item.id === job.id);
     if (index < 0) jobs.push(job);
     await saveJobs();
-    if (browserSource) void feedBrowserJob(job, browserSource);
+    if (browserSource) void feedBrowserJob(job, { ...browserSource, ...browserChoice });
     return job;
   }
   if (message.action === 'cancel') {
