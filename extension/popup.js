@@ -319,6 +319,7 @@ async function initialize() {
 }
 
 $('extension-id').value = chrome.runtime.id;
+text($('extension-version'), 'v' + chrome.runtime.getManifest().version);
 $('theme-toggle').addEventListener('click', () => {
   themeRevision++;
   const theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';

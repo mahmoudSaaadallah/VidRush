@@ -26,7 +26,8 @@ async function main() {
     const errors = [];
     let worker = context.serviceWorkers()[0];
     if (!worker) worker = await context.waitForEvent('serviceworker');
-    const id = extensionId(JSON.parse(fs.readFileSync(path.join(extensionPath, 'manifest.json'), 'utf8')).key);
+    const manifest = JSON.parse(fs.readFileSync(path.join(extensionPath, 'manifest.json'), 'utf8'));
+    const id = extensionId(manifest.key);
     assert.equal(new URL(worker.url()).host, id);
     assert.deepEqual(await worker.evaluate(() => chrome.runtime.getManifest().permissions), ['activeTab', 'scripting', 'webRequest', 'nativeMessaging', 'storage']);
     assert.equal(await worker.evaluate(() => chrome.runtime.getManifest().host_permissions), undefined);
@@ -51,7 +52,7 @@ async function main() {
     const base = `http://127.0.0.1:${server.address().port}`;
     const page = await context.newPage();
     page.on('pageerror', error => errors.push(error.message));
-    await page.addInitScript(() => {
+    await page.addInitScript(extensionVersion => {
       const listeners = [];
       window.testMode = 'ready';
       window.actions = [];
@@ -66,6 +67,7 @@ async function main() {
       window.progressJob = percent => { currentJob = { ...currentJob, percent }; updateJobs(); };
       window.chrome = {
         runtime: {
+          getManifest: () => ({ version: extensionVersion }),
           id: 'abcdefghijklmnopabcdefghijklmnop',
           reload() { window.updateActivated = true; },
           async sendMessage(message) {
@@ -136,9 +138,10 @@ async function main() {
           onChanged: { addListener: callback => listeners.push(callback) },
         },
       };
-    });
+    }, manifest.version);
     await page.goto(`${base}/popup.html`);
     await page.locator('#video').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#extension-version').innerText(), 'v' + manifest.version);
     await page.setViewportSize({ width: 400, height: 600 });
     await page.locator('#discovery-settings').click();
     await page.locator('#enable-discovery').click();
@@ -362,6 +365,7 @@ async function main() {
       await popup.addInitScript(() => { chrome.runtime.sendMessage = async () => ({ ok: false, error: 'Theme test without a native companion.' }); });
       await popup.goto('chrome-extension://' + id + '/popup.html');
       await popup.locator('#setup').waitFor({ state: 'visible' });
+      assert.equal(await popup.locator('#extension-version').innerText(), 'v' + manifest.version);
       return popup;
     }
     let themePopup = await openThemePopup(context);
