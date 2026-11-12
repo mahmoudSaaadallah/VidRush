@@ -9,7 +9,8 @@ function mediaKind(value, contentType = '') {
   const name = url.pathname;
   if (/\.(?:ts|m4s|aac|vtt|srt|jpg|png)$/i.test(name)) return null;
   const type = contentType.split(';')[0].trim().toLowerCase();
-  if (/\.m3u8$/i.test(name) || ['application/vnd.apple.mpegurl', 'application/x-mpegurl', 'audio/mpegurl'].includes(type)) return 'hls';
+  if (type.startsWith('audio/') && !['audio/mpegurl', 'audio/x-mpegurl'].includes(type)) return null;
+  if (/\.m3u8$/i.test(name) || ['application/vnd.apple.mpegurl', 'application/x-mpegurl', 'audio/mpegurl', 'audio/x-mpegurl'].includes(type)) return 'hls';
   if (/\.mpd$/i.test(name) || type === 'application/dash+xml') return 'dash';
   if (/\.(?:mp4|webm|mov|m4v)$/i.test(name) || ['video/mp4', 'video/webm', 'video/quicktime'].includes(type)) return 'file';
   return null;

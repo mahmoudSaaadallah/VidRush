@@ -35,14 +35,17 @@ async function main() {
     config.downloadDir = selectedDirectory;
     const video = path.join(fixture, 'sample.mp4');
     execFileSync(path.join(config.ffmpegPath, 'ffmpeg.exe'), ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=640x360:r=25', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=44100', '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-movflags', '+faststart', video], { windowsHide: true });
+    for (const [track, name] of [['a', 'audio-only.mp4'], ['v', 'video-only.mp4']]) {
+      execFileSync(path.join(config.ffmpegPath, 'ffmpeg.exe'), ['-hide_banner', '-loglevel', 'error', '-i', video, '-map', '0:' + track, '-c', 'copy', '-movflags', '+faststart', path.join(fixture, name)], { windowsHide: true });
+    }
     execFileSync(path.join(config.ffmpegPath, 'ffmpeg.exe'), ['-hide_banner', '-loglevel', 'error', '-i', video,
       '-map', '0:v', '-map', '0:v', '-map', '0:a', '-c:v', 'libx264', '-filter:v:0', 'scale=640:360', '-filter:v:1', 'scale=320:180',
       '-b:v:0', '300k', '-b:v:1', '150k', '-c:a', 'aac', '-f', 'dash', path.join(fixture, 'manifest.mpd')], { windowsHide: true, cwd: fixture });
     const payload = fs.readFileSync(video);
     server = http.createServer((req, res) => {
       const name = req.url.slice(1);
-      if (!/^(sample\.mp4|manifest\.mpd|(?:init|chunk)-stream[\w.-]+\.m4s)$/.test(name)) { res.writeHead(404); res.end(); return; }
-      if (name !== 'sample.mp4' && (req.headers.referer !== `http://127.0.0.1:${server.address().port}/lesson` || req.headers['user-agent'] !== 'VidRush test browser' || req.headers.origin !== 'https://player.test')) { res.writeHead(403); res.end('Video request context required'); return; }
+      if (!/^(sample\.mp4|(?:audio|video)-only\.mp4|manifest\.mpd|(?:init|chunk)-stream[\w.-]+\.m4s)$/.test(name)) { res.writeHead(404); res.end(); return; }
+      if (!name.endsWith('.mp4') && (req.headers.referer !== `http://127.0.0.1:${server.address().port}/lesson` || req.headers['user-agent'] !== 'VidRush test browser' || req.headers.origin !== 'https://player.test')) { res.writeHead(403); res.end('Video request context required'); return; }
       const file = path.join(fixture, name);
       if (!fs.existsSync(file)) { res.writeHead(404); res.end(); return; }
       const body = fs.readFileSync(file);
@@ -80,6 +83,10 @@ async function main() {
     assert.equal(ping.downloadDir, selectedDirectory);
     const media = await request('inspect', { url });
     assert.ok(media.options.length);
+    assert.equal(media.options[0].height, 360);
+    for (const name of ['audio-only.mp4', 'video-only.mp4']) {
+      await assert.rejects(request('inspect', { url: new URL(name, url).href }), /both a video track and an audio track/);
+    }
     const job = await request('download', { token: media.token, choice: media.options[0].id });
     const deadline = Date.now() + 90000;
     let complete;
@@ -133,6 +140,14 @@ async function main() {
     const completedBrowser = events.find(event => event.job?.id === browserJob.id && event.job.status === 'completed');
     assert.ok(completedBrowser);
     assert.deepEqual(fs.readFileSync(path.join(config.downloadDir, completedBrowser.job.filename)), payload);
+    const audioOnly = fs.readFileSync(path.join(fixture, 'audio-only.mp4'));
+    const partial = await request('prepareBrowser', { metadata: { title: 'Audio-only MP4', ext: 'mp4', bytes: audioOnly.length } });
+    const partialJob = await request('download', { token: partial.token, choice: partial.options[0].id });
+    await request('browserChunk', { jobId: partialJob.id, offset: 0, data: audioOnly.toString('base64') });
+    await assert.rejects(request('browserFinish', { jobId: partialJob.id }), /both a video track and an audio track/);
+    assert.ok(events.some(event => event.job?.id === partialJob.id && event.job.status === 'failed'));
+    assert.ok(!fs.readdirSync(config.downloadDir).some(file => file.includes(partialJob.id) && file.endsWith('.mp4')));
+    console.log('Audio-only and silent MP4s were rejected despite the video/mp4 response type. Browser-only audio was not published as a completed file.');
     console.log('Framed browser transport saved the second quality with its own size and container, byte-for-byte through the native companion.');
     console.log('Real DASH download required the saved referrer for manifest and segments, selected 180p, and merged separate audio successfully.');
     await assert.rejects(request('inspect', { url: 'file:///C:/private' }), /HTTP|URL/);

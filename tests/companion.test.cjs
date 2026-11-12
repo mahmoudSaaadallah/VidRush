@@ -9,6 +9,14 @@ const fs = require('node:fs');
 const { Companion } = require('../host/companion.cjs');
 const { buildMedia } = require('../host/media.cjs');
 const tick = () => new Promise(resolve => setImmediate(resolve));
+const videoTrack = { codec_type: 'video', codec_name: 'h264', width: 1280, height: 720 };
+const audioTrack = { codec_type: 'audio', codec_name: 'aac' };
+function probeResult(call, streams) {
+  assert.match(call.executable, /ffprobe(?:\.exe)?$/);
+  call.child.stdout.write(JSON.stringify({ streams }));
+  call.child.exitCode = 0;
+  call.child.emit('close', 0);
+}
 
 test('a single embedded video keeps its referrer for download without exposing private source URLs', async t => {
   const h = harness(); t.after(h.cleanup);
@@ -82,10 +90,39 @@ test('download responds with serializable job and emits progress and completion'
   child.stdout.write('VIDRUSH_PROGRESS:{"status":"finished","downloaded_bytes":100,"total_bytes":100}\n');
   await tick();
   assert.equal(h.events.at(-1).job.status, 'processing');
+  child.stdout.write(`VIDRUSH_FILE:${JSON.stringify(path.join(h.directory, 'complete.mp4'))}\n`);
   child.exitCode = 0; child.emit('close', 0);
+  await tick(); probeResult(h.calls[1], [videoTrack, audioTrack]);
   await tick();
   assert.equal(h.events.at(-1).job.status, 'completed');
   assert.equal(h.events.at(-1).job.percent, 100);
+});
+
+test('a successful yt-dlp exit with a silent video is not marked completed', async t => {
+  const h = harness(); t.after(h.cleanup);
+  const job = { id: 'job', title: 'Silent', status: 'downloading' };
+  h.companion.startJob(job, 'https://test.test/video', { selector: 'mp4' });
+  const { child } = h.calls[0];
+  child.stdout.write(`VIDRUSH_FILE:${JSON.stringify(path.join(h.directory, 'silent.mp4'))}\n`);
+  child.exitCode = 0; child.emit('close', 0);
+  await tick(); probeResult(h.calls[1], [videoTrack]);
+  await tick();
+  assert.equal(h.events.at(-1).job.status, 'failed');
+  assert.match(h.events.at(-1).job.error, /both a video track and an audio track/);
+});
+
+test('the companion rejects an audio-only MP4 even when yt-dlp does not know its codecs', async t => {
+  const h = harness(); t.after(h.cleanup);
+  const url = 'https://cdn.test/rendition?token=private';
+  const inspect = h.companion.handle({ id: 'inspect', action: 'inspect', url, referer: 'https://player.test/' });
+  h.calls[0].child.stdout.write(JSON.stringify({ formats: [{ format_id: '0', url, ext: 'mp4', protocol: 'https', vcodec: null }] }));
+  h.calls[0].child.emit('close', 0);
+  await tick();
+  assert.equal(h.calls[1].args[h.calls[1].args.indexOf('-referer') + 1], 'https://player.test/');
+  probeResult(h.calls[1], [audioTrack, { ...videoTrack, disposition: { attached_pic: 1 } }]);
+  await inspect;
+  assert.equal(h.events.at(-1).code, 'MISSING_MEDIA_TRACKS');
+  assert.equal(h.companion.media.size, 0);
 });
 
 test('cached media availability never starts yt-dlp or discloses source details', async t => {
@@ -172,12 +209,13 @@ test('changing the default folder persists it while active jobs keep their origi
   const process = h.calls[0].child;
   process.stdout.write(`VIDRUSH_FILE:${JSON.stringify(path.join(oldDirectory, 'video.mp4'))}\n`);
   process.emit('close', 0); await tick();
+  probeResult(h.calls[1], [videoTrack, audioTrack]); await tick();
   assert.equal(h.events.at(-1).job.filename, 'video.mp4');
   assert.equal(h.events.at(-1).job.downloadDir, oldDirectory);
   await h.companion.handle({ id: '3', action: 'download', token: media.token, choice: media.options[0].id });
-  assert.equal(h.calls[1].args[h.calls[1].args.indexOf('--paths') + 1], selected);
+  assert.equal(h.calls[2].args[h.calls[2].args.indexOf('--paths') + 1], selected);
   await h.companion.handle({ id: '4', action: 'openFolder', jobId: first.id });
-  assert.deepEqual(h.calls[2].args, [oldDirectory]);
+  assert.deepEqual(h.calls[3].args, [oldDirectory]);
 });
 
 test('folder cancellation and errors preserve the configured destination', async t => {

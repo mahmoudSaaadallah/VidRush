@@ -1,12 +1,13 @@
 'use strict';
 
 // Serialized by chrome.scripting: keep this function independent of worker state.
-function discoverPageMedia() {
+function discoverPageMedia(protectionOnly = false) {
   const sources = new Map();
   const playerOrigins = new Set();
   const page = new URL(location.href);
   const videos = [...document.querySelectorAll('video')].slice(0, 30);
   const hasDrm = videos.some(video => !!video.mediaKeys);
+  if (protectionOnly) return { hasDrm };
   const hasBlob = videos.some(video => (video.currentSrc || video.src || '').startsWith('blob:'));
   const embeds = [];
   function add(value, mediaElement = false, videoIndex) {

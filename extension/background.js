@@ -6,6 +6,8 @@ importScripts('browser-transfer.js');
 importScripts('player-identity.js');
 
 const HOST = 'com.vidrush.companion';
+const protectedVideoMessage = 'المشغّل يستخدم حماية DRM. تحميل الفيديو المحمي غير مدعوم في VidRush.';
+const missingTracksMessage = 'المصدر المتاح ناقص مسار الصوت أو الصورة. VidRush يحتاج مصدرًا يوفّر المسارين.';
 let nativePort;
 let nextId = 0;
 let pageSources = false;
@@ -108,6 +110,7 @@ async function inspectSource(tabId, url, set, index, entry) {
   let media;
   try { media = await request('inspect', { url: source.url, referer: source.referer, title: source.title, ...context }); }
   catch (error) {
+    if (['DRM_PROTECTED', 'MISSING_MEDIA_TRACKS'].includes(error.code)) throw error;
     if (source.kind === 'embed' || source.kind !== 'file' && mediaKind(source.url) !== 'file') throw error;
     if (!browserTransfer) throw new Error('هذا الفيديو يحتاج النقل عبر المتصفح. شغّل Update.cmd ثم أعد تحميل الإضافة.');
     const target = { tabId, ...(source.documentId ? { documentIds: [source.documentId] } : { frameIds: [source.frameId || 0] }) };
@@ -172,7 +175,10 @@ function connect() {
     clearTimeout(request.timer);
     pending.delete(message.id);
     if (message.ok) request.resolve(message.data);
-    else request.reject(new Error(message.error || 'The companion could not complete this request.'));
+    else {
+      const detail = message.code === 'DRM_PROTECTED' ? protectedVideoMessage : message.code === 'MISSING_MEDIA_TRACKS' ? missingTracksMessage : message.error;
+      request.reject(Object.assign(new Error(detail || 'The companion could not complete this request.'), { code: message.code }));
+    }
   });
   port.onDisconnect.addListener(() => {
     const detail = chrome.runtime.lastError?.message;
@@ -209,9 +215,14 @@ function request(action, data = {}, timeout = 100000) {
 async function inspectTab(tabId, url, scanOnly = false, entry) {
   let originalError;
   if (!scanOnly) {
+    const [main] = await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, func: discoverPageMedia, args: [true] }).catch(() => []);
+    if (main?.result?.hasDrm) throw new Error(protectedVideoMessage);
     let media;
     try { media = await request('inspect', { url }); }
-    catch (error) { originalError = error; }
+    catch (error) {
+      if (error.code === 'DRM_PROTECTED') throw error;
+      originalError = error;
+    }
     if (media) {
       if ((await chrome.tabs.get(tabId)).url !== url) throw new Error('تغيّرت الصفحة أثناء الفحص. اضغط تحديث على الفيديو الجديد.');
       return media;
@@ -226,6 +237,7 @@ async function inspectTab(tabId, url, scanOnly = false, entry) {
   const current = await chrome.tabs.get(tabId);
   const main = frames.find(frame => frame.frameId === 0)?.result;
   if (current.url !== url || main?.pageUrl !== url) throw new Error('تغيّرت الصفحة أثناء الفحص. اضغط تحديث على الفيديو الجديد.');
+  if (main.hasDrm) throw new Error(protectedVideoMessage);
   const origins = [...new Set(frames.flatMap(frame => frame.result?.playerOrigins || []))];
   if (!pageSources) throw new Error('البرنامج المساعد المثبّت لا يدعم فحص المشغّل. شغّل Update.cmd من نسخة المشروع الجديدة، ثم أعد تحميل الإضافة بعد انتهاء التحميلات.');
   const seen = new Set([url]);
@@ -247,13 +259,18 @@ async function inspectTab(tabId, url, scanOnly = false, entry) {
     if (latest.url !== url) throw new Error('تغيّرت الصفحة أثناء الفحص. اضغط تحديث على الفيديو الجديد.');
     let media;
     try { media = await inspectSource(tabId, url, set, index, entry); }
-    catch (error) { sourceError ||= error; continue; }
+    catch (error) {
+      if (!sourceError || error.code === 'DRM_PROTECTED' || error.code === 'MISSING_MEDIA_TRACKS' && !sourceError.code) sourceError = error;
+      continue;
+    }
     if ((await chrome.tabs.get(tabId)).url !== url) throw new Error('تغيّرت الصفحة أثناء الفحص. اضغط تحديث على الفيديو الجديد.');
     return media;
   }
+  if (protectedFrames.size || sourceError?.code === 'DRM_PROTECTED') throw new Error(protectedVideoMessage);
   const full = await scanStatus(tabId);
   const grants = await Promise.all(origins.map(origin => chrome.permissions.contains({ origins: [origin] })));
   const missingOrigins = origins.filter((_, index) => !grants[index]);
+  if (!missingOrigins.length && (sourceError?.code === 'MISSING_MEDIA_TRACKS' || originalError?.code === 'MISSING_MEDIA_TRACKS')) throw new Error(missingTracksMessage);
   const message = full.active ? 'الفحص الشامل شغال. أعد تشغيل الفيديو أو غيّر الجودة، ثم اضغط تحديث. لم يظهر بث MP4 أو HLS أو DASH قابل للتحميل حتى الآن؛ بعض المشغّلات تستخدم نقلًا خاصًا غير مدعوم.' : missingOrigins.length ? 'شغّل الفيديو داخل الموقع، وفعّل الفحص التلقائي مرة واحدة للسماح بالوصول للمشغّلات المضمّنة.' : 'لم يظهر رابط فيديو قابل للتحميل. شغّل الفيديو ثم اضغط تحديث، أو فعّل الفحص الشامل من أعلى النافذة. بعض المشغّلات والمحتوى المحمي غير مدعومين.';
   const error = new Error(message + '\n' + (sourceError?.message || originalError?.message || ''));
   error.playerOrigins = missingOrigins;
