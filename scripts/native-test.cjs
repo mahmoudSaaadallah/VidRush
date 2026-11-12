@@ -42,7 +42,7 @@ async function main() {
     server = http.createServer((req, res) => {
       const name = req.url.slice(1);
       if (!/^(sample\.mp4|manifest\.mpd|(?:init|chunk)-stream[\w.-]+\.m4s)$/.test(name)) { res.writeHead(404); res.end(); return; }
-      if (name !== 'sample.mp4' && req.headers.referer !== `http://127.0.0.1:${server.address().port}/lesson`) { res.writeHead(403); res.end('Video referrer required'); return; }
+      if (name !== 'sample.mp4' && (req.headers.referer !== `http://127.0.0.1:${server.address().port}/lesson` || req.headers['user-agent'] !== 'VidRush test browser' || req.headers.origin !== 'https://player.test')) { res.writeHead(403); res.end('Video request context required'); return; }
       const file = path.join(fixture, name);
       if (!fs.existsSync(file)) { res.writeHead(404); res.end(); return; }
       const body = fs.readFileSync(file);
@@ -94,7 +94,7 @@ async function main() {
     assert.deepEqual(fs.readFileSync(path.join(config.downloadDir, files[0])), payload);
     assert.ok(events.some(event => event.job?.percent > 0));
     assert.equal(ping.capabilities.pageSources, true);
-    const dash = await request('inspect', { url: `http://127.0.0.1:${server.address().port}/manifest.mpd`, referer: `http://127.0.0.1:${server.address().port}/lesson`, title: 'Authorized embedded lesson' });
+    const dash = await request('inspect', { url: `http://127.0.0.1:${server.address().port}/manifest.mpd`, referer: `http://127.0.0.1:${server.address().port}/lesson`, userAgent: 'VidRush test browser', origin: 'https://player.test', title: 'Authorized embedded lesson' });
     assert.equal(dash.title, 'Authorized embedded lesson');
     assert.ok(dash.options.some(option => option.height === 360));
     const lowQuality = dash.options.find(option => option.height === 180);
@@ -112,6 +112,19 @@ async function main() {
     const probe = JSON.parse(execFileSync(path.join(config.ffmpegPath, 'ffprobe.exe'), ['-v', 'quiet', '-show_streams', '-of', 'json', mergedFile], { encoding: 'utf8', windowsHide: true }));
     assert.equal(probe.streams.find(stream => stream.codec_type === 'video').height, 180);
     assert.ok(probe.streams.some(stream => stream.codec_type === 'audio'));
+    assert.equal(ping.capabilities.browserTransfer, true);
+    const browser = await request('prepareBrowser', { metadata: { ext: 'mp4', bytes: payload.length, height: 360, title: 'Browser-streamed original test video' } });
+    const browserJob = await request('download', { token: browser.token, choice: browser.options[0].id });
+    for (let offset = 0; offset < payload.length; offset += 65536) {
+      const chunk = payload.subarray(offset, offset + 65536);
+      const ack = await request('browserChunk', { jobId: browserJob.id, offset, data: chunk.toString('base64') });
+      assert.equal(ack.received, offset + chunk.length);
+    }
+    await request('browserFinish', { jobId: browserJob.id });
+    const completedBrowser = events.find(event => event.job?.id === browserJob.id && event.job.status === 'completed');
+    assert.ok(completedBrowser);
+    assert.deepEqual(fs.readFileSync(path.join(config.downloadDir, completedBrowser.job.filename)), payload);
+    console.log('Framed browser transport saved an original MP4 byte-for-byte through the native companion.');
     console.log('Real DASH download required the saved referrer for manifest and segments, selected 180p, and merged separate audio successfully.');
     await assert.rejects(request('inspect', { url: 'file:///C:/private' }), /HTTP|URL/);
     console.log(`Real yt-dlp ${ping.version}: native ping, analysis, quality selection, progress, downloaded bytes, and invalid URL handling passed.`);

@@ -5,9 +5,10 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { createInterface } = require('node:readline');
-const { validateUrl, buildMedia, publicMedia, baseArgs, downloadArgs, refererArgs, safeError } = require('./media.cjs');
+const { validateUrl, buildMedia, publicMedia, baseArgs, downloadArgs, sourceArgs, safeError } = require('./media.cjs');
 const { selectFolder, saveDownloadDirectory } = require('./folders.cjs');
 const { openFolder } = require('./open-folder.cjs');
+const { browserMedia, BrowserDownload } = require('./browser-download.cjs');
 
 class Companion {
   constructor(config, emit, spawnProcess = spawn, options = {}) {
@@ -16,6 +17,7 @@ class Companion {
     this.spawn = spawnProcess;
     this.media = new Map();
     this.jobs = new Map();
+    this.browserJobs = new Map();
     this.children = new Set();
     this.inspections = 0;
     this.choosingFolder = false;
@@ -69,7 +71,7 @@ class Companion {
       if (action === 'ping') {
         const version = (await this.run(['--version'], { timeout: 15000 })).trim();
         data = { version, ffmpeg: !!this.config.ffmpegPath, downloadDir: this.config.downloadDir, choosingFolder: this.choosingFolder,
-          protocolVersion: 3, capabilities: { folderPicker: true, openFolder: true, pageSources: true } };
+          protocolVersion: 5, capabilities: { folderPicker: true, openFolder: true, pageSources: true, sourceContext: true, browserTransfer: true } };
       } else if (action === 'chooseFolder') {
         if (this.choosingFolder) throw new Error('A folder picker is already open. Finish or cancel it first.');
         this.choosingFolder = true;
@@ -84,7 +86,8 @@ class Companion {
       } else if (action === 'inspect') {
         if (this.inspections >= 2) throw new Error('Video analysis is already running. Wait a moment and retry.');
         const url = validateUrl(message.url);
-        const headers = refererArgs(message.referer);
+        const context = { userAgent: message.userAgent, origin: message.origin };
+        const headers = sourceArgs(message.referer, context);
         this.inspections++;
         try {
           const raw = await this.run([...baseArgs(this.config), ...headers, '--skip-download', '--dump-single-json', '--', url]);
@@ -94,10 +97,23 @@ class Companion {
           if (info.entries?.length === 1 && info.entries[0]?.formats) info = info.entries[0];
           const media = buildMedia(info, !!this.config.ffmpegPath);
           if (message.referer && typeof message.title === 'string' && message.title.trim()) media.title = message.title.trim().slice(0, 300);
-          this.media.set(media.token, { ...media, url, referer: message.referer });
+          this.media.set(media.token, { ...media, url, referer: message.referer, context });
           if (this.media.size > 8) this.media.delete(this.media.keys().next().value);
           data = publicMedia(media);
         } finally { this.inspections--; }
+      } else if (action === 'prepareBrowser') {
+        const media = browserMedia(message.metadata);
+        this.media.set(media.token, media);
+        if (this.media.size > 8) this.media.delete(this.media.keys().next().value);
+        data = publicMedia(media);
+      } else if (['browserChunk', 'browserFinish', 'browserAbort'].includes(action)) {
+        const transfer = this.browserJobs.get(message.jobId);
+        if (!transfer) throw new Error('Browser download is no longer active.');
+        try {
+          if (action === 'browserChunk') data = await transfer.chunk(message.offset, message.data);
+          else if (action === 'browserFinish') { data = await transfer.finish(); this.browserJobs.delete(message.jobId); }
+          else { transfer.fail(String(message.error || 'The video page closed or the browser transfer stopped.')); this.browserJobs.delete(message.jobId); data = { stopped: true }; }
+        } catch (error) { transfer.fail(error.message); this.browserJobs.delete(message.jobId); throw error; }
       } else if (action === 'download') {
         const media = this.media.get(message.token);
         const choice = media?.options.find(option => option.id === message.choice);
@@ -113,13 +129,15 @@ class Companion {
           if (!old) break;
           this.jobs.delete(old.id);
         }
-        this.startJob(job, media.url, choice, media.referer);
+        if (media.browser) this.browserJobs.set(job.id, new BrowserDownload(job, media, value => this.update(value)));
+        else this.startJob(job, media.url, choice, media.referer, media.context);
         data = this.publicJob(job);
       } else if (action === 'cancel') {
         const job = this.jobs.get(message.jobId);
         if (!job) throw new Error('Download not found.');
         if (['downloading', 'processing'].includes(job.status)) {
           job.status = 'cancelled';
+          this.browserJobs.get(job.id)?.cancel(); this.browserJobs.delete(job.id);
           this.stop(job.child);
           this.update(job);
         }
@@ -146,7 +164,7 @@ class Companion {
 
   update(job) { this.emit({ event: 'job', job: this.publicJob(job) }); }
 
-  startJob(job, url, choice, referer) {
+  startJob(job, url, choice, referer, context) {
     job.downloadDir ||= this.config.downloadDir;
     const onLine = line => {
       if (!['downloading', 'processing'].includes(job.status)) return;
@@ -168,7 +186,7 @@ class Companion {
         } catch { /* Completion still works if the extractor omits the filename. */ }
       }
     };
-    const task = this.run(downloadArgs({ ...this.config, downloadDir: job.downloadDir }, url, choice, referer), { timeout: 0, onLine });
+    const task = this.run(downloadArgs({ ...this.config, downloadDir: job.downloadDir }, url, choice, referer, context), { timeout: 0, onLine });
     job.child = onLine.child;
     task.then(() => {
       if (job.status === 'cancelled') return;
@@ -182,7 +200,7 @@ class Companion {
     });
   }
 
-  close() { for (const child of this.children) this.stop(child); }
+  close() { for (const child of this.children) this.stop(child); for (const transfer of this.browserJobs.values()) transfer.cancel(); this.browserJobs.clear(); }
 }
 
 module.exports = { Companion };

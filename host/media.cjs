@@ -70,6 +70,19 @@ function refererArgs(value) {
   return ['--referer', validateUrl(value)];
 }
 
+function sourceArgs(referer, context = {}) {
+  const args = refererArgs(referer);
+  if (context.userAgent !== undefined) {
+    if (typeof context.userAgent !== 'string' || !context.userAgent || context.userAgent.length > 512 || /[\r\n]/.test(context.userAgent)) throw new Error('Invalid video user agent.');
+    args.push('--user-agent', context.userAgent);
+  }
+  if (context.origin !== undefined) {
+    if (typeof context.origin !== 'string' || /[\r\n]/.test(context.origin) || new URL(validateUrl(context.origin)).origin !== context.origin) throw new Error('Invalid video origin.');
+    args.push('--add-header', 'Origin:' + context.origin);
+  }
+  return args;
+}
+
 function safeError(value) {
   return String(value).replace(/https?:\/\/[^\s<>"']+/g, raw => {
     try { const url = new URL(raw); return url.origin + url.pathname + (url.search ? '?[redacted]' : ''); }
@@ -77,7 +90,7 @@ function safeError(value) {
   });
 }
 
-function downloadArgs(config, url, choice, referer) {
+function downloadArgs(config, url, choice, referer, context) {
   const args = [...baseArgs(config), '--newline', '--progress', '--progress-delta', '0.5',
     '--progress-template', 'download:VIDRUSH_PROGRESS:%(progress)j',
     '--print', 'after_move:VIDRUSH_FILE:%(filepath)j', '--no-simulate',
@@ -86,8 +99,8 @@ function downloadArgs(config, url, choice, referer) {
     '--format', choice.selector];
   if (config.ffmpegPath) args.push('--ffmpeg-location', config.ffmpegPath);
   if (choice.needsMerge) args.push('--merge-output-format', choice.container);
-  args.push(...refererArgs(referer), '--', validateUrl(url));
+  args.push(...sourceArgs(referer, context), '--', validateUrl(url));
   return args;
 }
 
-module.exports = { validateUrl, buildMedia, publicMedia, baseArgs, downloadArgs, refererArgs, safeError };
+module.exports = { validateUrl, buildMedia, publicMedia, baseArgs, downloadArgs, refererArgs, sourceArgs, safeError };

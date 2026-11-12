@@ -89,6 +89,14 @@ select { width:100%; min-height:44px; background:var(--bg); color:var(--text); b
 .text-button:hover:enabled { background:var(--selected); }
 .primary { width:100%; display:flex; align-items:center; justify-content:center; gap:9px; min-height:46px; padding:10px 14px; border:0; border-radius:9px; background:var(--button); color:#fff; font-size:15px; font-weight:700; }
 .primary:hover:enabled { background:#1d4ed8; }
+.source-picker { display:grid; gap:5px; margin-bottom:10px; font-size:12px; }
+.source-picker select { width:100%; padding:7px; color:var(--text); background:var(--surface); border:1px solid var(--border); border-radius:7px; }
+#discovery-dialog { width:calc(100% - 32px); max-width:368px; max-height:calc(100% - 32px); overflow:auto; margin:auto; padding:16px; border:1px solid var(--border); border-radius:12px; background:var(--bg); color:var(--text); }
+#discovery-dialog::backdrop { background:#0009; }
+#discovery-dialog h2 { margin:0; font-size:18px; }
+#discovery-dialog p { line-height:1.7; font-size:13px; }
+#discovery-dialog .primary,#discovery-dialog .outline-button { margin-bottom:9px; }
+#capture-status { border:1px solid var(--border); padding:8px; border-radius:8px; color:var(--selected-text); }
 footer { min-height:26px; padding:4px 16px; display:flex; justify-content:space-between; align-items:center; color:var(--muted); font-size:12px; border-top:1px solid var(--border); }
 .notice { padding:9px 11px; margin:0 0 10px; border:1px solid var(--border); background:var(--surface); color:var(--muted); border-radius:8px; font-size:12px; overflow-wrap:anywhere; white-space:pre-wrap; max-height:120px; overflow:auto; }
 .notice.error { color:var(--error); background:var(--error-bg); border-color:var(--error); }

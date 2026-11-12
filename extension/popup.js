@@ -10,6 +10,8 @@ let folderFeatures = false;
 let analysisSequence = 0;
 let themeRevision = 0;
 let playerOrigins = [];
+let capturePoll;
+const SCAN_ORIGINS = ['http://*/*', 'https://*/*'];
 const jobElements = new Map();
 const cancelling = new Set();
 
@@ -133,6 +135,32 @@ function renderQualities() {
   updateQuality();
 }
 
+function showMedia(result) {
+  media = result;
+  $('browser-note').hidden = !media.browser;
+  text($('audio-note'), media.browser ? 'الملف حسب المصدر' : 'الصوت مضمّن');
+  text($('title'), media.title); $('title').title = media.title;
+  text($('extractor'), media.site);
+  text($('duration'), media.duration ? Math.floor(media.duration / 60) + ':' + String(Math.floor(media.duration % 60)).padStart(2, '0') : '');
+  $('video-source').replaceChildren();
+  for (const source of media.detectedSources || []) {
+    const option = document.createElement('option'); option.value = source.index; option.textContent = source.label;
+    $('video-source').append(option);
+  }
+  $('video-source').value = String(media.sourceIndex ?? 0);
+  $('source-picker').hidden = (media.detectedSources?.length || 0) < 2;
+  renderQualities(); $('video').hidden = false; showPlaceholder(false);
+}
+
+async function refreshCaptureState() {
+  const status = await call('captureStatus', { tabId: activeTab?.id });
+  $('enable-discovery').hidden = status.enabled;
+  $('start-discovery').hidden = !status.enabled || status.active;
+  $('stop-discovery').hidden = !status.active;
+  $('disable-discovery').hidden = !status.enabled;
+  text($('capture-status'), status.active ? 'الفحص شغال لهذا التبويب · روابط الفيديو المكتشفة: ' + status.count : status.enabled ? 'الفحص الشامل مفعّل. اختار التبويب من الزر التالي.' : 'الفحص الشامل غير مفعّل.');
+}
+
 function createJob(job) {
   const article = $('job-template').content.firstElementChild.cloneNode(true);
   article.dataset.jobId = job.id;
@@ -233,13 +261,7 @@ async function analyze(refresh = false, scanPlayer = false) {
   try {
     const result = await call('analyze', { tabId: activeTab.id, url: activeTab.url, refresh, scanPlayer });
     if (sequence !== analysisSequence) return;
-    media = result;
-    text($('title'), media.title);
-    $('title').title = media.title;
-    text($('extractor'), media.site);
-    text($('duration'), media.duration ? Math.floor(media.duration / 60) + ':' + String(Math.floor(media.duration % 60)).padStart(2, '0') : '');
-    renderQualities();
-    $('video').hidden = false;
+    showMedia(result);
     notice('');
   } catch (error) {
     if (sequence === analysisSequence) {
@@ -325,6 +347,45 @@ $('activate-update').addEventListener('click', async () => {
 });
 $('reconnect').addEventListener('click', () => void initialize());
 $('refresh').addEventListener('click', () => void analyze(true));
+$('video-source').addEventListener('change', async () => {
+  const sourceIndex = Number($('video-source').value);
+  media = null; renderDestination(destination); $('video-source').disabled = true;
+  try {
+    const result = await call('selectSource', { tabId: activeTab.id, url: activeTab.url, sourceIndex });
+    showMedia(result); notice('');
+  } catch (error) { notice(error.message, 'error'); }
+  finally { $('video-source').disabled = false; renderDestination(destination); }
+});
+$('discovery-settings').addEventListener('click', () => {
+  $('discovery-dialog').showModal();
+  void refreshCaptureState().catch(error => text($('capture-status'), error.message));
+  capturePoll = setInterval(() => { void refreshCaptureState().catch(() => {}); }, 2000);
+});
+$('close-discovery').addEventListener('click', () => $('discovery-dialog').close());
+$('discovery-dialog').addEventListener('close', () => { clearInterval(capturePoll); $('discovery-settings').focus(); });
+async function startCapture() {
+  [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  await call('startCapture', { tabId: activeTab?.id, url: activeTab?.url });
+  await refreshCaptureState();
+}
+$('enable-discovery').addEventListener('click', async () => {
+  $('enable-discovery').disabled = true;
+  try {
+    const granted = await chrome.permissions.request({ origins: SCAN_ORIGINS });
+    if (!granted) { text($('capture-status'), 'لم يتم منح الصلاحية. الفحص الشامل لم يتفعّل.'); return; }
+    await startCapture();
+  } catch (error) { text($('capture-status'), error.message); }
+  finally { $('enable-discovery').disabled = false; }
+});
+$('start-discovery').addEventListener('click', () => { void startCapture().catch(error => text($('capture-status'), error.message)); });
+async function stopCapture() { await call('stopCapture', { tabId: activeTab?.id }); await refreshCaptureState(); }
+$('stop-discovery').addEventListener('click', () => { void stopCapture().catch(error => text($('capture-status'), error.message)); });
+$('disable-discovery').addEventListener('click', async () => {
+  $('disable-discovery').disabled = true;
+  try { await call('stopCapture', { tabId: activeTab?.id }); await chrome.permissions.remove({ origins: SCAN_ORIGINS }); await refreshCaptureState(); }
+  catch (error) { text($('capture-status'), error.message); }
+  finally { $('disable-discovery').disabled = false; }
+});
 $('scan-player').addEventListener('click', async () => {
   if (!playerOrigins.length) return;
   $('scan-player').disabled = true;
