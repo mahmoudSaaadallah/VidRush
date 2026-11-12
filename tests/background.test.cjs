@@ -89,6 +89,28 @@ test('fallback failures preserve the video stream error instead of an incidental
   await rejected;
 });
 
+test('a verified single-track source is skipped in favor of another complete source', async () => {
+  const h = harness([], { page: { sources: [{ url: 'https://cdn.test/track.mp4' }, { url: 'https://cdn.test/complete.mp4' }] } });
+  await bootstrap(h);
+  const operation = h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video', scanPlayer: true });
+  await tick();
+  assert.equal(h.sent.at(-1).url, 'https://cdn.test/track.mp4');
+  h.callbacks.message({ id: h.sent.at(-1).id, ok: false, code: 'MISSING_MEDIA_TRACKS', error: 'Missing audio' });
+  await tick();
+  assert.equal(h.sent.at(-1).url, 'https://cdn.test/complete.mp4');
+  h.respond(h.sent.at(-1), { token: 'complete' });
+  assert.equal((await operation).token, 'complete');
+});
+
+test('the extension reports protected playback without asking the companion to fetch the source', async () => {
+  const h = harness([], { page: { hasDrm: true, sources: [{ url: 'https://cdn.test/protected.mpd' }] } });
+  await bootstrap(h);
+  const input = { action: 'analyze', tabId: 1, url: 'https://example.com/video' };
+  await assert.rejects(h.api.handle(input), /DRM/);
+  await assert.rejects(h.api.handle({ ...input, scanPlayer: true }), /DRM/);
+  assert.equal(h.sent.filter(message => message.action === 'inspect').length, 0);
+});
+
 test('locked player offers only its optional origin and rescans after permission without repeating the failed page URL', async () => {
   const origin = 'https://player.hotmart.com/*';
   const h = harness([], { page: { playerOrigins: [origin] } });

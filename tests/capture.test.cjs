@@ -17,6 +17,7 @@ test('media detection uses response MIME for arbitrary domains and extensionless
   assert.equal(mediaKind('https://unknown.test/play?id=1', 'application/vnd.apple.mpegurl'), 'hls');
   assert.equal(mediaKind('https://unknown.test/data', 'application/dash+xml'), 'dash');
   assert.equal(mediaKind('https://unknown.test/stream', 'video/mp4'), 'file');
+  assert.equal(mediaKind('https://unknown.test/rendition.mp4', 'audio/mp4'), null);
   assert.equal(mediaKind('https://unknown.test/master.m3u8?sig=x'), 'hls');
   for (const url of ['blob:https://a.test/id', 'file:///private', 'https://user:pass@a.test/a.mp4', 'https://a.test/segment.m4s', 'https://a.test/segment.ts']) assert.equal(mediaKind(url, 'video/mp4'), null);
 });
