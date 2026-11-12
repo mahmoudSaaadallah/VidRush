@@ -123,11 +123,13 @@ File names include the source video ID and format IDs, so different qualities of
 
 - Only qualities actually reported by the website are shown. VidRush does not upscale videos.
 - Up to three resolution buttons provide quick choices. **All qualities**, when shown, contains every available choice, including alternatives with the same resolution. The details below the buttons describe the selected choice's container, frame rate, and approximate size when available.
-- Regular yt-dlp choices include audio. The browser-file fallback saves the selected MP4/WebM file as supplied by the website; it does not merge a separate audio track.
+- Regular downloads use the audio and video from the same source. If an unprotected HLS or DASH stream supplies separate tracks, the companion combines them. The browser-file fallback needs a file that already contains both tracks.
 - **MP4** is offered when a suitable source combination is available. Other combinations may produce **MKV**. VidRush does not re-encode the video to force MP4.
 - An approximate size appears when the website provides enough information; otherwise no size is shown.
 - Separate video and audio tracks download in sequence. The percentage can restart for the second track, then the status changes to merging. Wait for **Completed**, rather than a track reaching 100%.
 - Cancelling may leave `.part` files or intermediate tracks. Files already on disk are not automatically deleted.
+
+An MP4 file can contain audio only or video only. When yt-dlp leaves the codecs unknown for a direct MP4 or WebM, the companion checks the tracks with the bundled FFmpeg tools. It also checks each saved download before marking it **Completed**. If a track is missing, the job shows an error. A failed download may leave a file in the save folder.
 
 ### Reopening VidRush without scanning again
 
@@ -137,7 +139,7 @@ Changing the page URL, replacing the video element, changing its source/declared
 
 The cache keeps up to **eight recent tabs** in memory during the current companion connection. It is not a permanent download-link history and is not saved to disk. Closing a tab, restarting Chrome/the companion, or reloading the extension clears its usable selections. If a selection is evicted, a browser-only file catalogue disappears, or the player identity cannot be verified, VidRush safely analyzes again. Hidden changes inside a private player API may still require Refresh.
 
-Existing users: run **`Update.cmd`**, finish active downloads, and reload VidRush at `chrome://extensions`. Confirm **v0.2.2** in the footer; the companion update is required for completed-result reuse.
+Existing users: run **`Update.cmd`**, finish active downloads, and reload VidRush at `chrome://extensions`. Confirm **v0.2.3** in the footer. The companion update provides saved-result reuse and track verification.
 
 ### Embedded players and signed-in lessons
 
@@ -153,7 +155,7 @@ If a video plays in Chrome but VidRush reports **Unsupported URL**, the page may
 
 This helps with non-DRM players that expose a readable file or stream. VidRush does not sign you in or export browser cookies/passwords. A `blob:` address alone is not a downloadable file; the underlying media must be discoverable.
 
-Existing users must run **`Update.cmd`** from the latest project copy, finish active downloads, then reload VidRush at `chrome://extensions`. Check that the footer shows **v0.2.2**. Both the extension and companion need this update. Saved website permissions remain managed by Chrome; revoke the broad grant using **Comprehensive scan → Disable comprehensive scan and remove permission**, or change site access in Chrome.
+Saved website permissions remain managed by Chrome. Revoke the broad grant using **Comprehensive scan → Disable comprehensive scan and remove permission**, or change site access in Chrome.
 
 ### Enable comprehensive scanning once
 
@@ -258,6 +260,7 @@ If you customized `downloadDir` to point inside the companion installation folde
 | New/unknown player, missing scan button, or no source detected | Open **Comprehensive scan** beside the theme controls, enable it, then restart playback and refresh. Choose the correct detected source if several videos are present. |
 | Browser-file download stops when leaving a page | Keep the original video page open until the download completes. Reopen, play, and refresh the video before retrying. |
 | Player scan finds no source, or a stream returns 403 | Reload the lesson, start playback, and retry. Signed URLs can expire; some streams also need cookies or DRM and remain unsupported. Never paste account credentials into VidRush. |
+| MP4 has sound only or picture only | Update VidRush and scan the page again. VidRush needs a source that provides both tracks. If it detects DRM, use the service's official playback options. |
 | Popup closes when choosing a folder | Finish or cancel the Windows dialog, then click VidRush again. The background connection retains your selection. |
 | Folder picker is already open | Finish or cancel the existing Windows folder dialog before starting another selection. |
 | Folder buttons are disabled, or the popup says the helper is old | Run `Update.cmd` from the latest project folder, finish active downloads, and activate the update or reload VidRush at `chrome://extensions`. Both installed code copies must be updated; merging alone is insufficient. |
