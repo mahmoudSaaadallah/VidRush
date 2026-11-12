@@ -1,6 +1,6 @@
 {
   "name": "vidrush",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "A Chrome extension and local yt-dlp companion for Windows.",
   "scripts": {

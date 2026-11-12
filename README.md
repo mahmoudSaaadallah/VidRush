@@ -129,6 +129,16 @@ File names include the source video ID and format IDs, so different qualities of
 - Separate video and audio tracks download in sequence. The percentage can restart for the second track, then the status changes to merging. Wait for **Completed**, rather than a track reaching 100%.
 - Cancelling may leave `.part` files or intermediate tracks. Files already on disk are not automatically deleted.
 
+### Reopening VidRush without scanning again
+
+After a successful scan, close and reopen the popup on the same video page. VidRush reuses the quality list and the selected detected video. It performs a quick check of the page/player identity and the companion's saved selection, without asking yt-dlp to analyze the video again. Normal playback, unrelated captured video requests, and advertisement-frame navigation do not discard a verified result. Switching between qualities already declared by the same player also keeps the result.
+
+Changing the page URL, replacing the video element, changing its source/declared playlist, or reloading its document triggers a fresh scan. **`تحديث`** (Refresh) always forces a new scan, even if the page looks unchanged. If a site expires a download link or exposes new qualities later, use Refresh.
+
+The cache keeps up to **eight recent tabs** in memory during the current companion connection. It is not a permanent download-link history and is not saved to disk. Closing a tab, restarting Chrome/the companion, or reloading the extension clears its usable selections. If a selection is evicted, a browser-only file catalogue disappears, or the player identity cannot be verified, VidRush safely analyzes again. Hidden changes inside a private player API may still require Refresh.
+
+Existing users: run **`Update.cmd`**, finish active downloads, and reload VidRush at `chrome://extensions`. Confirm **v0.2.2** in the footer; the companion update is required for completed-result reuse.
+
 ### Embedded players and signed-in lessons
 
 If a video plays in Chrome but VidRush reports **Unsupported URL**, the page may be a wrapper around a separate player. VidRush discovers HTTP(S) frame origins dynamically, without a list of player names. It tries video elements, recent media resources, and visible player frames after normal URL analysis fails.
@@ -143,7 +153,7 @@ If a video plays in Chrome but VidRush reports **Unsupported URL**, the page may
 
 This helps with non-DRM players that expose a readable file or stream. VidRush does not sign you in or export browser cookies/passwords. A `blob:` address alone is not a downloadable file; the underlying media must be discoverable.
 
-Existing users must run **`Update.cmd`** from the latest project copy, finish active downloads, then reload VidRush at `chrome://extensions`. Check that the footer shows **v0.2.1**. Both the extension and companion need this update for browser quality selection. Saved website permissions remain managed by Chrome; revoke the broad grant using **Comprehensive scan → Disable comprehensive scan and remove permission**, or change site access in Chrome.
+Existing users must run **`Update.cmd`** from the latest project copy, finish active downloads, then reload VidRush at `chrome://extensions`. Check that the footer shows **v0.2.2**. Both the extension and companion need this update. Saved website permissions remain managed by Chrome; revoke the broad grant using **Comprehensive scan → Disable comprehensive scan and remove permission**, or change site access in Chrome.
 
 ### Enable comprehensive scanning once
 
