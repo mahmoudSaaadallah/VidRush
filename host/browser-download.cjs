@@ -11,15 +11,16 @@ function browserMedia(value) {
     if (!variant || !['mp4', 'webm'].includes(variant.ext) || !Number.isSafeInteger(variant.bytes) || variant.bytes <= 0 || variant.bytes > 2 ** 41) throw new Error('Invalid browser video metadata.');
     const height = Number.isInteger(variant.height) && variant.height > 0 && variant.height <= 16384 ? variant.height : 0;
     const label = typeof variant.label === 'string' ? variant.label.replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 60) : '';
-    return { id: randomUUID(), height, fps: 0, container: variant.ext, bytes: variant.bytes, label: `${label || (height ? height + 'p' : 'Original')} · ${variant.ext.toUpperCase()} · Browser`, selector: 'browser', needsMerge: false };
+    return { id: randomUUID(), height, fps: 0, container: variant.ext, bytes: variant.bytes, label: `${label || (height ? height + 'p' : 'Original')} · ${variant.ext.toUpperCase()} · Browser`, selector: 'browser', needsMerge: false, isMSE: !!variant.isMSE };
   });
   return { token: randomUUID(), browser: true, title: String(value.title || 'Video').slice(0, 300), duration: Number.isFinite(value.duration) && value.duration > 0 ? value.duration : null, site: 'Browser video',
     options };
 }
 
 class BrowserDownload {
-  constructor(job, choice, update) {
-    this.job = job; this.update = update; this.bytes = 0; this.total = choice.bytes; this.ext = choice.container; this.lastProgress = 0;
+  constructor(job, choice, update, ffmpegPath, run) {
+    this.job = job; this.choice = choice; this.update = update; this.bytes = 0; this.total = choice.bytes; this.ext = choice.container; this.lastProgress = 0;
+    this.ffmpegPath = ffmpegPath; this.run = run;
     const title = job.title.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[ .]+$/g, '').slice(0, 100) || 'Video';
     this.filename = `VidRush - ${title} [${job.id}].${this.ext}`;
     this.file = path.join(job.downloadDir, this.filename); this.partial = this.file + '.part';
@@ -48,9 +49,34 @@ class BrowserDownload {
     this.finishing = true;
     await new Promise((resolve, reject) => this.stream.end(error => error ? reject(error) : resolve()));
     if (this.job.status !== 'downloading') throw new Error('Browser download was cancelled.');
-    await verify(this.partial);
-    if (this.job.status !== 'downloading') throw new Error('Browser download was cancelled.');
-    fs.renameSync(this.partial, this.file);
+    if (this.choice?.isMSE && this.ffmpegPath && this.run) {
+      const ffmpeg = path.join(this.ffmpegPath, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
+      const remuxed = this.partial + '.remux';
+      let remuxSuccess = false;
+      try {
+        await this.run(['-y', '-i', this.partial, '-c', 'copy', '-movflags', 'faststart', remuxed], { executable: ffmpeg, timeout: 30000 });
+        if (fs.existsSync(remuxed) && fs.statSync(remuxed).size > 0) {
+          remuxSuccess = true;
+          await verify(remuxed);
+          if (this.job.status !== 'downloading') throw new Error('Browser download was cancelled.');
+          fs.renameSync(remuxed, this.file);
+          try { fs.unlinkSync(this.partial); } catch {}
+        }
+      } catch (err) {
+        if (remuxed && fs.existsSync(remuxed)) { try { fs.unlinkSync(remuxed); } catch {} }
+        if (this.job.status !== 'downloading') throw err;
+        if (remuxSuccess) throw err;
+      }
+      if (!remuxSuccess) {
+        await verify(this.partial);
+        if (this.job.status !== 'downloading') throw new Error('Browser download was cancelled.');
+        fs.renameSync(this.partial, this.file);
+      }
+    } else {
+      await verify(this.partial);
+      if (this.job.status !== 'downloading') throw new Error('Browser download was cancelled.');
+      fs.renameSync(this.partial, this.file);
+    }
     Object.assign(this.job, { status: 'completed', percent: 100, filename: this.filename }); this.update(this.job);
     return { completed: true };
   }
