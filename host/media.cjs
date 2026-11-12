@@ -1,6 +1,7 @@
 'use strict';
 
 const { randomUUID } = require('node:crypto');
+const { missingTracks, protectedMedia } = require('./tracks.cjs');
 
 function validateUrl(value) {
   if (typeof value !== 'string' || value.length > 8192) throw new Error('Invalid video URL.');
@@ -13,6 +14,7 @@ function validateUrl(value) {
 }
 
 function buildMedia(info, hasFfmpeg) {
+  if (info.has_drm === true) throw protectedMedia();
   if (info._type === 'playlist' || info.entries) throw new Error('Open an individual video page, rather than a playlist.');
   if (info.is_live || info.live_status === 'is_live' || info.live_status === 'is_upcoming') throw new Error('Live streams are not supported. Open a recorded video.');
   const formats = (info.formats || []).filter(f => f.format_id && !f.has_drm);
@@ -47,7 +49,11 @@ function buildMedia(info, hasFfmpeg) {
     });
   }
   const options = [...choices.values()].sort((a, b) => b.height - a.height || b.fps - a.fps || a.container.localeCompare(b.container));
-  if (!options.length) throw new Error('No downloadable video with audio was found. The page may be unsupported, require login, or use DRM.');
+  if (!options.length) {
+    if (info.formats?.some(format => format.has_drm === true)) throw protectedMedia();
+    if (formats.length && formats.every(format => format.vcodec === 'none' || format.acodec === 'none') && (!videos.length || !audio.length)) throw missingTracks();
+    throw new Error('No downloadable video with audio was found. The page may be unsupported or require login.');
+  }
   return {
     token: randomUUID(), title: String(info.title || 'Video').slice(0, 300),
     duration: info.duration || null, site: String(info.extractor_key || info.extractor || 'Website').slice(0, 80),

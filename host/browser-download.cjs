@@ -42,9 +42,13 @@ class BrowserDownload {
     if (Date.now() - this.lastProgress > 250) { this.lastProgress = Date.now(); this.update(this.job); }
     return { received: this.bytes };
   }
-  async finish() {
+  async finish(verify = async () => {}) {
+    if (this.finishing) throw new Error('Browser download is already being verified.');
     if (this.job.status !== 'downloading' || this.bytes !== this.total) throw new Error('Browser download ended before all video bytes arrived.');
+    this.finishing = true;
     await new Promise((resolve, reject) => this.stream.end(error => error ? reject(error) : resolve()));
+    if (this.job.status !== 'downloading') throw new Error('Browser download was cancelled.');
+    await verify(this.partial);
     if (this.job.status !== 'downloading') throw new Error('Browser download was cancelled.');
     fs.renameSync(this.partial, this.file);
     Object.assign(this.job, { status: 'completed', percent: 100, filename: this.filename }); this.update(this.job);

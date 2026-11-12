@@ -44,8 +44,10 @@ test('generic direct-video extractors with unknown codecs remain downloadable', 
 });
 
 test('DRM, silent-only formats, playlists and unsupported pages are not offered', () => {
-  assert.throws(() => buildMedia({ formats: formats.map(f => ({ ...f, has_drm: true })) }, true), /No downloadable/);
-  assert.throws(() => buildMedia({ formats: [formats[1]] }, true), /No downloadable/);
+  assert.throws(() => buildMedia({ formats: formats.map(f => ({ ...f, has_drm: true })) }, true), { code: 'DRM_PROTECTED' });
+  assert.throws(() => buildMedia({ has_drm: true, formats }, true), { code: 'DRM_PROTECTED' });
+  assert.throws(() => buildMedia({ formats: [formats[1]] }, true), { code: 'MISSING_MEDIA_TRACKS' });
+  assert.throws(() => buildMedia({ formats: [formats[2]] }, true), { code: 'MISSING_MEDIA_TRACKS' });
   assert.throws(() => buildMedia({ _type: 'playlist', entries: [] }, true), /individual/);
   assert.throws(() => buildMedia({ is_live: true, formats }, true), /Live streams/);
 });

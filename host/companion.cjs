@@ -9,6 +9,7 @@ const { validateUrl, buildMedia, publicMedia, baseArgs, downloadArgs, sourceArgs
 const { selectFolder, saveDownloadDirectory } = require('./folders.cjs');
 const { openFolder } = require('./open-folder.cjs');
 const { browserMedia, BrowserDownload } = require('./browser-download.cjs');
+const { isAmbiguousDirectFile, missingTracks, readTracks, trackProbeArgs } = require('./tracks.cjs');
 
 class Companion {
   constructor(config, emit, spawnProcess = spawn, options = {}) {
@@ -25,9 +26,9 @@ class Companion {
     this.pickFolder = options.selectFolder || selectFolder;
   }
 
-  run(args, { timeout = 90000, onLine } = {}) {
+  run(args, { timeout = 90000, onLine, executable = this.config.ytdlpPath } = {}) {
     return new Promise((resolve, reject) => {
-      const child = this.spawn(this.config.ytdlpPath, args, { windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = this.spawn(executable, args, { windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
       this.children.add(child);
       let stdout = '';
       let stderr = '';
@@ -48,11 +49,39 @@ class Companion {
         clearTimeout(timer);
         this.children.delete(child);
         if (timedOut) reject(new Error('Video analysis timed out. Try again or open the individual video page.'));
-        else if (code !== 0) reject(new Error(stderr.trim() || `yt-dlp exited with code ${code}.`));
+        else if (code !== 0) reject(new Error(stderr.trim() || `${path.basename(executable)} exited with code ${code}.`));
         else resolve(stdout);
       });
       if (onLine) onLine.child = child;
     });
+  }
+
+  async probeTracks(input, network) {
+    const executable = path.join(this.config.ffmpegPath, process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe');
+    return readTracks(await this.run(trackProbeArgs(input, network), { executable, timeout: 8000 }));
+  }
+
+  async resolveDirectTracks(info, context) {
+    if (!this.config.ffmpegPath || info.has_drm || !Array.isArray(info.formats)) return;
+    const candidates = info.formats.filter(isAmbiguousDirectFile).slice(0, 2);
+    await Promise.all(candidates.map(async format => {
+      let tracks;
+      try { tracks = await this.probeTracks(validateUrl(format.url), { ...context, ext: format.ext }); }
+      catch (error) {
+        if (error.code === 'DRM_PROTECTED') format.has_drm = true;
+        // Some servers reject a separate metadata request. Validate the saved file instead.
+        return;
+      }
+      format.vcodec = tracks.video ? tracks.video.codec_name || 'unknown' : 'none';
+      format.acodec = tracks.audio ? tracks.audio.codec_name || 'unknown' : 'none';
+      if (tracks.video) format.height ||= tracks.video.height;
+    }));
+  }
+
+  async verifySavedVideo(file) {
+    if (!this.config.ffmpegPath) return;
+    const { video, audio } = await this.probeTracks(file);
+    if (!video || !audio) throw missingTracks();
   }
 
   stop(child) {
@@ -102,6 +131,7 @@ class Companion {
           // Generic extractors wrap a single embedded video in a playlist result.
           // Do not expand real playlists, unresolved entries, or multiple videos.
           if (info.entries?.length === 1 && info.entries[0]?.formats) info = info.entries[0];
+          await this.resolveDirectTracks(info, { ...context, referer: message.referer });
           const media = buildMedia(info, !!this.config.ffmpegPath);
           if (message.referer && typeof message.title === 'string' && message.title.trim()) media.title = message.title.trim().slice(0, 300);
           this.media.set(media.token, { ...media, url, referer: message.referer, context });
@@ -118,7 +148,10 @@ class Companion {
         if (!transfer) throw new Error('Browser download is no longer active.');
         try {
           if (action === 'browserChunk') data = await transfer.chunk(message.offset, message.data);
-          else if (action === 'browserFinish') { data = await transfer.finish(); this.browserJobs.delete(message.jobId); }
+          else if (action === 'browserFinish') {
+            data = await transfer.finish(file => this.verifySavedVideo(file));
+            this.browserJobs.delete(message.jobId);
+          }
           else { transfer.fail(String(message.error || 'The video page closed or the browser transfer stopped.')); this.browserJobs.delete(message.jobId); data = { stopped: true }; }
         } catch (error) { transfer.fail(error.message); this.browserJobs.delete(message.jobId); throw error; }
       } else if (action === 'download') {
@@ -160,7 +193,8 @@ class Companion {
       } else throw new Error('Unknown companion action.');
       this.emit({ id, ok: true, data });
     } catch (error) {
-      this.emit({ id, ok: false, error: safeError(error.message || error).slice(-3000) });
+      const code = ['DRM_PROTECTED', 'MISSING_MEDIA_TRACKS'].includes(error.code) ? error.code : undefined;
+      this.emit({ id, ok: false, error: safeError(error.message || error).slice(-3000), code });
     }
   }
 
@@ -195,7 +229,14 @@ class Companion {
     };
     const task = this.run(downloadArgs({ ...this.config, downloadDir: job.downloadDir }, url, choice, referer, context), { timeout: 0, onLine });
     job.child = onLine.child;
-    task.then(() => {
+    task.then(async () => {
+      if (job.status === 'cancelled') return;
+      if (this.config.ffmpegPath) {
+        if (!job.filename) throw new Error('VidRush could not verify the saved video file.');
+        job.status = 'processing';
+        this.update(job);
+        await this.verifySavedVideo(path.join(job.downloadDir, job.filename));
+      }
       if (job.status === 'cancelled') return;
       job.status = 'completed'; job.percent = 100;
       delete job.speed; delete job.eta;
