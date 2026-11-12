@@ -41,15 +41,35 @@ async function main() {
     execFileSync(path.join(config.ffmpegPath, 'ffmpeg.exe'), ['-hide_banner', '-loglevel', 'error', '-i', video,
       '-map', '0:v', '-map', '0:v', '-map', '0:a', '-c:v', 'libx264', '-filter:v:0', 'scale=640:360', '-filter:v:1', 'scale=320:180',
       '-b:v:0', '300k', '-b:v:1', '150k', '-c:a', 'aac', '-f', 'dash', path.join(fixture, 'manifest.mpd')], { windowsHide: true, cwd: fixture });
+    const transport = path.join(fixture, 'with-audio.ts');
+    execFileSync(path.join(config.ffmpegPath, 'ffmpeg.exe'), ['-hide_banner', '-loglevel', 'error', '-i', video, '-map', '0:v', '-map', '0:a',
+      '-c', 'copy', '-streamid', '0:256', '-streamid', '1:257', '-f', 'mpegts', transport], { windowsHide: true });
+    const transportBytes = fs.readFileSync(transport);
+    const packets = [];
+    // Leave the program map's AAC entry in place, but remove its audio packets.
+    // FFprobe should see the declared track with zero channels and sample rate.
+    for (let offset = 0; offset < transportBytes.length; offset += 188) {
+      const packet = transportBytes.subarray(offset, offset + 188);
+      assert.equal(packet[0], 0x47);
+      if ((packet.readUInt16BE(1) & 0x1fff) !== 257) packets.push(packet);
+    }
+    fs.writeFileSync(path.join(fixture, 'without-audio.ts'), Buffer.concat(packets));
+    for (const [name, segment] of [['rendition', 'without-audio.ts'], ['clear-hls.m3u8', 'with-audio.ts']]) {
+      fs.writeFileSync(path.join(fixture, name), '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXTINF:2.0,\n' + segment + '\n#EXT-X-ENDLIST\n');
+    }
+    let changeHlsAfterInspection = false;
     const payload = fs.readFileSync(video);
     server = http.createServer((req, res) => {
-      const name = req.url.slice(1);
-      if (!/^(sample\.mp4|(?:audio|video)-only\.mp4|manifest\.mpd|(?:init|chunk)-stream[\w.-]+\.m4s)$/.test(name)) { res.writeHead(404); res.end(); return; }
+      const requestName = req.url.slice(1);
+      const name = requestName === 'late-hls.m3u8' ? (changeHlsAfterInspection ? 'rendition' : 'clear-hls.m3u8') : requestName;
+      if (!/^(sample\.mp4|(?:audio|video)-only\.mp4|manifest\.mpd|(?:init|chunk)-stream[\w.-]+\.m4s|rendition|clear-hls\.m3u8|with(?:out)?-audio\.ts)$/.test(name)) { res.writeHead(404); res.end(); return; }
       if (!name.endsWith('.mp4') && (req.headers.referer !== `http://127.0.0.1:${server.address().port}/lesson` || req.headers['user-agent'] !== 'VidRush test browser' || req.headers.origin !== 'https://player.test')) { res.writeHead(403); res.end('Video request context required'); return; }
       const file = path.join(fixture, name);
       if (!fs.existsSync(file)) { res.writeHead(404); res.end(); return; }
       const body = fs.readFileSync(file);
-      res.writeHead(200, { 'Content-Type': name.endsWith('.mpd') ? 'application/dash+xml' : 'video/mp4', 'Content-Length': body.length });
+      const contentType = name === 'rendition' || name.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl'
+        : name.endsWith('.mpd') ? 'application/dash+xml' : name.endsWith('.ts') ? 'video/mp2t' : 'video/mp4';
+      res.writeHead(200, { 'Content-Type': contentType, 'Content-Length': body.length });
       res.end(req.method === 'HEAD' ? undefined : body);
     });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -78,6 +98,15 @@ async function main() {
       pending.set(key, { resolve, reject, timer });
       child.stdin.write(encode({ id: key, action, ...data }));
     });
+    const finishedJob = async id => {
+      const deadline = Date.now() + 90000;
+      while (Date.now() < deadline) {
+        const event = events.find(event => event.job?.id === id && ['completed', 'failed'].includes(event.job.status));
+        if (event) return event.job;
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+      throw new Error('Timed out waiting for job ' + id);
+    };
     const ping = await request('ping');
     assert.ok(ping.version);
     assert.equal(ping.downloadDir, selectedDirectory);
@@ -88,34 +117,37 @@ async function main() {
       await assert.rejects(request('inspect', { url: new URL(name, url).href }), /both a video track and an audio track/);
     }
     const job = await request('download', { token: media.token, choice: media.options[0].id });
-    const deadline = Date.now() + 90000;
-    let complete;
-    while (Date.now() < deadline) {
-      complete = events.find(event => event.job?.id === job.id && ['completed', 'failed'].includes(event.job.status));
-      if (complete) break;
-      await new Promise(resolve => setTimeout(resolve, 200));
-    }
-    assert.equal(complete?.job.status, 'completed', JSON.stringify(complete || events));
+    const complete = await finishedJob(job.id);
+    assert.equal(complete.status, 'completed', complete.error);
     const files = fs.readdirSync(config.downloadDir).filter(file => file.endsWith('.mp4'));
     assert.equal(files.length, 1);
     assert.deepEqual(fs.readFileSync(path.join(config.downloadDir, files[0])), payload);
     assert.ok(events.some(event => event.job?.percent > 0));
     assert.equal(ping.capabilities.pageSources, true);
-    const dash = await request('inspect', { url: `http://127.0.0.1:${server.address().port}/manifest.mpd`, referer: `http://127.0.0.1:${server.address().port}/lesson`, userAgent: 'VidRush test browser', origin: 'https://player.test', title: 'Authorized embedded lesson' });
+    const headers = { referer: new URL('lesson', url).href, userAgent: 'VidRush test browser', origin: 'https://player.test' };
+    const hls = await request('inspect', { ...headers, url: new URL('clear-hls.m3u8', url).href });
+    assert.equal(hls.options[0].height, 360);
+    const hlsJob = await request('download', { token: hls.token, choice: hls.options[0].id });
+    const hlsDone = await finishedJob(hlsJob.id);
+    assert.equal(hlsDone.status, 'completed', hlsDone.error);
+    await assert.rejects(request('inspect', { ...headers, url: new URL('rendition', url).href }), /both a video track and an audio track/);
+    const late = await request('inspect', { ...headers, url: new URL('late-hls.m3u8', url).href });
+    changeHlsAfterInspection = true;
+    const lateJob = await request('download', { token: late.token, choice: late.options[0].id });
+    const lateFailure = await finishedJob(lateJob.id);
+    assert.equal(lateFailure.status, 'failed');
+    assert.match(lateFailure.error, /no readable audio track/);
+    console.log('HLS with valid AAC completed. An extensionless playlist with unreadable AAC was rejected early, and a later source change produced a specific postprocessing error.');
+
+    const dash = await request('inspect', { ...headers, url: new URL('manifest.mpd', url).href, title: 'Authorized embedded lesson' });
     assert.equal(dash.title, 'Authorized embedded lesson');
     assert.ok(dash.options.some(option => option.height === 360));
     const lowQuality = dash.options.find(option => option.height === 180);
     assert.ok(lowQuality, 'The lower resolution must be selectable.');
     const mergedJob = await request('download', { token: dash.token, choice: lowQuality.id });
-    const mergeDeadline = Date.now() + 90000;
-    let merged;
-    while (Date.now() < mergeDeadline) {
-      merged = events.find(event => event.job?.id === mergedJob.id && ['completed', 'failed'].includes(event.job.status));
-      if (merged) break;
-      await new Promise(resolve => setTimeout(resolve, 200));
-    }
-    assert.equal(merged?.job.status, 'completed', JSON.stringify(merged || events));
-    const mergedFile = path.join(config.downloadDir, merged.job.filename);
+    const merged = await finishedJob(mergedJob.id);
+    assert.equal(merged.status, 'completed', merged.error);
+    const mergedFile = path.join(config.downloadDir, merged.filename);
     const probe = JSON.parse(execFileSync(path.join(config.ffmpegPath, 'ffprobe.exe'), ['-v', 'quiet', '-show_streams', '-of', 'json', mergedFile], { encoding: 'utf8', windowsHide: true }));
     assert.equal(probe.streams.find(stream => stream.codec_type === 'video').height, 180);
     assert.ok(probe.streams.some(stream => stream.codec_type === 'audio'));
