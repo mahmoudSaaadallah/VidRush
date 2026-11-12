@@ -199,7 +199,7 @@ async function inspectTab(tabId, url, scanOnly = false) {
     if (latest.url !== url) throw new Error('تغيّرت الصفحة أثناء الفحص. اضغط تحديث على الفيديو الجديد.');
     let media;
     try { media = await inspectSource(tabId, url, set, index); }
-    catch (error) { sourceError = error; continue; }
+    catch (error) { sourceError ||= error; continue; }
     if ((await chrome.tabs.get(tabId)).url !== url) throw new Error('تغيّرت الصفحة أثناء الفحص. اضغط تحديث على الفيديو الجديد.');
     return media;
   }

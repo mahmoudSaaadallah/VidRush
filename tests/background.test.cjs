@@ -76,6 +76,16 @@ test('unsupported pages fall back to media discovered in an authorized player fr
   assert.equal((await operation).token, 'detected-video');
 });
 
+test('fallback failures preserve the video stream error instead of an incidental iframe error', async () => {
+  const h = harness([], { page: { sources: [{ url: 'https://cdn.test/master.m3u8' }], embeds: [{ url: 'https://frame.test/player' }] } });
+  await bootstrap(h);
+  const operation = h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video', scanPlayer: true });
+  const rejected = assert.rejects(operation, error => /HTTP 403: video stream/.test(error.message) && !/Unsupported iframe/.test(error.message));
+  await tick(); h.callbacks.message({ id: h.sent.at(-1).id, ok: false, error: 'HTTP 403: video stream' });
+  await tick(); h.callbacks.message({ id: h.sent.at(-1).id, ok: false, error: 'Unsupported iframe' });
+  await rejected;
+});
+
 test('locked player offers only its optional origin and rescans after permission without repeating the failed page URL', async () => {
   const origin = 'https://player.hotmart.com/*';
   const h = harness([], { page: { playerOrigins: [origin] } });
