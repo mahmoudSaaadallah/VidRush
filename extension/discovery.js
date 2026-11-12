@@ -41,15 +41,52 @@ function discoverPageMedia(protectionOnly = false) {
     embeds.push({ url: url.href, referer: url.origin === page.origin ? page.href.split('#')[0] : page.origin + '/', area: box.width * box.height });
   }
   if (!hasDrm) {
-    for (const element of [...document.querySelectorAll('[data-account],video-js,.video-js')].slice(0, 30)) {
-      const account = element.getAttribute('data-account') || element.querySelector('[data-account]')?.getAttribute('data-account') || element.closest('[data-account]')?.getAttribute('data-account');
-      const videoId = element.getAttribute('data-video-id') || element.getAttribute('data-videoid') || element.querySelector('[data-video-id],[data-videoid]')?.getAttribute('data-video-id') || element.querySelector('[data-video-id],[data-videoid]')?.getAttribute('data-videoid') || element.closest('[data-video-id],[data-videoid]')?.getAttribute('data-video-id');
+    let defaultBcAccount = '';
+    let defaultBcPlayer = '';
+    let defaultBcEmbed = 'default';
+    for (const script of [...document.querySelectorAll('script[src],link[href]')].slice(0, 100)) {
+      const src = script.src || script.getAttribute('href') || '';
+      const match = src.match(/players\.brightcove\.net\/(\d+)\/([a-zA-Z0-9-]+)(?:_([a-zA-Z0-9-]+))?/);
+      if (match) {
+        defaultBcAccount = defaultBcAccount || match[1];
+        defaultBcPlayer = defaultBcPlayer || match[2];
+        if (match[3]) defaultBcEmbed = match[3].replace(/-index-\d+$/, '') || 'default';
+        break;
+      }
+    }
+    if (!defaultBcAccount) {
+      const resources = performance.getEntriesByType?.('resource') || [];
+      for (const resource of resources) {
+        const match = (resource.name || '').match(/players\.brightcove\.net\/(\d+)\/([a-zA-Z0-9-]+)(?:_([a-zA-Z0-9-]+))?/);
+        if (match) {
+          defaultBcAccount = match[1];
+          defaultBcPlayer = defaultBcPlayer || match[2];
+          if (match[3]) defaultBcEmbed = match[3].replace(/-index-\d+$/, '') || 'default';
+          break;
+        }
+        const boltMatch = (resource.name || '').match(/manifest\.prod\.boltdns\.net\/manifest\/v1\/(?:hls|dash)\/[^/]+\/(?:clear|protected)\/(\d+)\//);
+        if (boltMatch && !defaultBcAccount) defaultBcAccount = boltMatch[1];
+      }
+    }
+    if (!defaultBcAccount) {
+      for (const el of document.querySelectorAll('[poster]')) {
+        const poster = el.getAttribute('poster') || '';
+        const match = poster.match(/brightcovecdn\.com\/(?:image|media)\/v1\/(?:jit|hls|dash)\/(?:clear\/)?(\d+)\//);
+        if (match) { defaultBcAccount = match[1]; break; }
+      }
+    }
+    for (const element of [...document.querySelectorAll('[data-account],video-js,.video-js,[data-video-id],[data-videoid]')].slice(0, 30)) {
+      if (element.tagName === 'VIDEO' && element.closest?.('video-js, .video-js')) continue;
+      const account = element.getAttribute('data-account') || element.querySelector('[data-account]')?.getAttribute('data-account') || element.closest?.('[data-account]')?.getAttribute('data-account') || defaultBcAccount;
+      const videoId = element.getAttribute('data-video-id') || element.getAttribute('data-videoid') || element.querySelector('[data-video-id],[data-videoid]')?.getAttribute('data-video-id') || element.querySelector('[data-video-id],[data-videoid]')?.getAttribute('data-videoid') || element.closest?.('[data-video-id],[data-videoid]')?.getAttribute('data-video-id');
       let player = element.getAttribute('data-player');
       let embed = element.getAttribute('data-embed') || 'default';
       if (!player) {
-        const match = element.className?.match?.(/\bbc-player-([a-zA-Z0-9-]+)(?:_([a-zA-Z0-9-]+))?\b/);
-        player = match?.[1] || 'default';
-        if (match?.[2]) embed = match[2];
+        const classSource = [typeof element.className === 'string' ? element.className : '', typeof element.closest?.('[class*="bc-player-"]')?.className === 'string' ? element.closest('[class*="bc-player-"]').className : ''].filter(Boolean).join(' ');
+        const match = classSource.match(/\bbc-player-([a-zA-Z0-9-]+)(?:_([a-zA-Z0-9-]+))?\b/);
+        player = match?.[1] || defaultBcPlayer || 'default';
+        if (match?.[2]) embed = match[2].replace(/-index-\d+$/, '') || 'default';
+        else embed = defaultBcEmbed || 'default';
       }
       if (/^\d+$/.test(account || '') && /^[0-9a-zA-Z_:-]+$/.test(videoId || '')) {
         const v = element.tagName === 'VIDEO' ? element : element.querySelector('video');

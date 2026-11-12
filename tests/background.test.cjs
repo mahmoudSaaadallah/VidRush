@@ -358,3 +358,46 @@ test('discoverPageMedia reconstructs Brightcove embed player URLs from DOM eleme
   assert.ok(result.sources.some(s => s.url === expectedUrl));
   assert.equal(result.sources[0].referer, 'https://www.watchit.com/');
 });
+
+test('discoverPageMedia extracts Brightcove account and player from page scripts when data-account is omitted', () => {
+  const code = fs.readFileSync(path.join(__dirname, '..', 'extension', 'discovery.js'), 'utf8');
+  const dom = {
+    location: { href: 'https://www.almentor.net/en/courses/Waste-Your-Time' },
+    document: {
+      title: 'Waste Your Time - Almentor',
+      baseURI: 'https://www.almentor.net/en/courses/Waste-Your-Time',
+      querySelectorAll(selector) {
+        if (selector === 'video') return [];
+        if (selector === 'iframe[src]') return [];
+        if (selector.includes('script[src]')) {
+          return [{
+            src: 'https://players.brightcove.net/6415782337001/jZNdE49vY_default/index.min.js',
+            getAttribute() { return null; },
+          }];
+        }
+        if (selector.includes('data-account') || selector.includes('data-video-id')) {
+          return [{
+            tagName: 'VIDEO-JS',
+            className: 'video-js bc-player-jZNdE49vY_default bc-player-jZNdE49vY_default-index-0',
+            getAttribute(name) {
+              if (name === 'data-video-id') return '6366111081112';
+              return null;
+            },
+            querySelector() { return null; },
+            closest() { return null; },
+          }];
+        }
+        return [];
+      },
+    },
+    performance: { getEntriesByType() { return []; } },
+    URL,
+  };
+  const context = vm.createContext(dom);
+  vm.runInContext(code, context);
+  const result = vm.runInContext('discoverPageMedia()', context);
+  assert.equal(result.hasDrm, false);
+  const expectedUrl = 'https://players.brightcove.net/6415782337001/jZNdE49vY_default/index.html?videoId=6366111081112';
+  assert.ok(result.sources.some(s => s.url === expectedUrl));
+  assert.equal(result.sources[0].referer, 'https://www.almentor.net/');
+});
