@@ -78,7 +78,7 @@ async function run(chromium, extensionPath) {
     await page.route('https://**/*', route => route.abort());
     await page.evaluate(() => {
       document.querySelector('video').src = URL.createObjectURL(new Blob(['fixture'], { type: 'video/mp4' }));
-      document.body.insertAdjacentHTML('beforeend', '<iframe src="https://player.hotmart.com/embed/example?signature=private"></iframe><iframe src="https://unrelated.test/ad"></iframe><div class="wistia_embed wistia_async_abcdefghij"></div><div class="video-js bc-player-q7xJcHDcKT_default" data-account="6057955906001" data-video-id="1847146344589202484"></div>');
+      document.body.insertAdjacentHTML('beforeend', '<iframe src="https://player.hotmart.com/embed/example?signature=private"></iframe><iframe src="https://unrelated.test/ad"></iframe><div class="wistia_embed wistia_async_abcdefghij"></div><div class="video-js bc-player-q7xJcHDcKT_default" data-account="6057955906001" data-video-id="1847146344589202484"></div><script src="https://players.brightcove.net/6415782337001/jZNdE49vY_default/index.min.js"></script><video-js class="video-js bc-player-jZNdE49vY_default bc-player-jZNdE49vY_default-index-0" data-video-id="6366111081112"></video-js>');
     });
     frames = await scan(worker);
     const main = frames[0].result;
@@ -86,6 +86,7 @@ async function run(chromium, extensionPath) {
     assert.ok(main.playerOrigins.includes('https://unrelated.test/*'), 'Frame discovery must not rely on player names.');
     assert.ok(main.sources.some(source => source.url === 'https://fast.wistia.net/embed/iframe/abcdefghij'));
     assert.ok(main.sources.some(source => source.url === 'https://players.brightcove.net/6057955906001/q7xJcHDcKT_default/index.html?videoId=1847146344589202484'));
+    assert.ok(main.sources.some(source => source.url === 'https://players.brightcove.net/6415782337001/jZNdE49vY_default/index.html?videoId=6366111081112'));
     assert.ok(main.sources.every(source => /^https?:/.test(source.url) && !source.url.includes('signature=private')));
     await page.locator('video').evaluate(async video => {
       const access = await navigator.requestMediaKeySystemAccess('org.w3.clearkey', [{
