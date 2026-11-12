@@ -5,15 +5,21 @@ const { randomUUID } = require('node:crypto');
 const { safeError } = require('./media.cjs');
 
 function browserMedia(value) {
-  if (!value || !['mp4', 'webm'].includes(value.ext) || !Number.isSafeInteger(value.bytes) || value.bytes <= 0 || value.bytes > 2 ** 41) throw new Error('Invalid browser video metadata.');
-  const height = Number.isInteger(value.height) && value.height > 0 && value.height <= 16384 ? value.height : 0;
+  const variants = value?.variants || [value];
+  if (!Array.isArray(variants) || !variants.length || variants.length > 16) throw new Error('Invalid browser video qualities.');
+  const options = variants.map(variant => {
+    if (!variant || !['mp4', 'webm'].includes(variant.ext) || !Number.isSafeInteger(variant.bytes) || variant.bytes <= 0 || variant.bytes > 2 ** 41) throw new Error('Invalid browser video metadata.');
+    const height = Number.isInteger(variant.height) && variant.height > 0 && variant.height <= 16384 ? variant.height : 0;
+    const label = typeof variant.label === 'string' ? variant.label.replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 60) : '';
+    return { id: randomUUID(), height, fps: 0, container: variant.ext, bytes: variant.bytes, label: `${label || (height ? height + 'p' : 'Original')} · ${variant.ext.toUpperCase()} · Browser`, selector: 'browser', needsMerge: false };
+  });
   return { token: randomUUID(), browser: true, title: String(value.title || 'Video').slice(0, 300), duration: Number.isFinite(value.duration) && value.duration > 0 ? value.duration : null, site: 'Browser video',
-    options: [{ id: randomUUID(), height, fps: 0, container: value.ext, bytes: value.bytes, label: `${height ? height + 'p' : 'Original'} · ${value.ext.toUpperCase()} · Browser`, selector: 'browser', needsMerge: false }] };
+    options };
 }
 
 class BrowserDownload {
-  constructor(job, media, update) {
-    this.job = job; this.update = update; this.bytes = 0; this.total = media.options[0].bytes; this.ext = media.options[0].container; this.lastProgress = 0;
+  constructor(job, choice, update) {
+    this.job = job; this.update = update; this.bytes = 0; this.total = choice.bytes; this.ext = choice.container; this.lastProgress = 0;
     const title = job.title.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[ .]+$/g, '').slice(0, 100) || 'Video';
     this.filename = `VidRush - ${title} [${job.id}].${this.ext}`;
     this.file = path.join(job.downloadDir, this.filename); this.partial = this.file + '.part';

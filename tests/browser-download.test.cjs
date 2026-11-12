@@ -10,7 +10,7 @@ function fixture(t, bytes = Buffer.concat([Buffer.from('000000206674797069736f6d
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vidrush-bytes-'));
   const media = browserMedia({ ext: 'mp4', bytes: bytes.length, height: 720, title: '../CON:video', duration: 2 });
   const job = { id: 'unique-id', title: media.title, status: 'downloading', downloadDir: root };
-  const transfer = new BrowserDownload(job, media, () => {});
+  const transfer = new BrowserDownload(job, media.options[0], () => {});
   t.after(async () => {
     transfer.cancel();
     if (!transfer.stream.closed) await new Promise(resolve => transfer.stream.once('close', resolve));
@@ -42,4 +42,18 @@ test('browser transport rejects bad metadata, file signatures, offsets, truncati
   h.job.status = 'cancelled'; h.transfer.cancel();
   await assert.rejects(h.transfer.chunk(16, h.bytes.subarray(16).toString('base64')), /no longer active/);
   assert.equal(h.job.status, 'cancelled');
+});
+
+test('browser qualities retain player labels and independent sizes with bounded validated metadata', () => {
+  const media = browserMedia({ title: 'Qualities', variants: [
+    { ext: 'mp4', bytes: 300000, height: 360, label: '360p' },
+    { ext: 'webm', bytes: 500000, height: 720, label: '720p\n' },
+  ] });
+  assert.deepEqual(media.options.map(v => [v.height, v.bytes, v.container]), [[360, 300000, 'mp4'], [720, 500000, 'webm']]);
+  assert.match(media.options[0].label, /^360p · MP4/);
+  assert.match(media.options[1].label, /^720p · WEBM/);
+  assert.notEqual(media.options[0].id, media.options[1].id);
+  assert.throws(() => browserMedia({ variants: [] }), /Invalid/);
+  assert.throws(() => browserMedia({ variants: Array(17).fill({ ext: 'mp4', bytes: 20 }) }), /Invalid/);
+  assert.throws(() => browserMedia({ variants: [{ ext: 'mp4', bytes: 20 }, { ext: 'mp4', bytes: Infinity }] }), /Invalid/);
 });

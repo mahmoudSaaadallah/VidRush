@@ -14,10 +14,10 @@ async function run(chromium, extensionPath) {
     res.setHeader('Content-Type', 'text/html');
     if (req.url === '/sw.js') {
       res.setHeader('Content-Type', 'application/javascript');
-      res.end(`self.addEventListener('install',e=>self.skipWaiting());self.addEventListener('activate',e=>e.waitUntil(clients.claim()));self.addEventListener('fetch',e=>{if(new URL(e.request.url).hostname!=='browser-only.invalid')return;const bytes=new Uint8Array(300000).fill(7);bytes.set([0,0,0,32,102,116,121,112,105,115,111,109]);const match=e.request.headers.get('range')?.match(/bytes=(\\d+)-(\\d*)/);const start=Number(match?.[1]||0),end=match?.[2]?Number(match[2]):bytes.length-1;e.respondWith(new Response(bytes.slice(start,end+1),{status:match?206:200,headers:{'Content-Type':'video/mp4','Content-Length':String(end-start+1),...(match?{'Content-Range':'bytes '+start+'-'+end+'/'+bytes.length}:{})}}));});`);
+      res.end(`self.addEventListener('install',e=>self.skipWaiting());self.addEventListener('activate',e=>e.waitUntil(clients.claim()));self.addEventListener('fetch',e=>{if(new URL(e.request.url).hostname!=='browser-only.invalid')return;const level=Number(new URL(e.request.url).searchParams.get('quality')||360);const bytes=new Uint8Array(level===1080?350000:300000).fill(level===720?7:9);bytes.set([0,0,0,32,102,116,121,112,105,115,111,109]);if(level===1440)bytes.fill(0,0,32);const match=e.request.headers.get('range')?.match(/bytes=(\\d+)-(\\d*)/);const start=Number(match?.[1]||0),end=match?.[2]?Number(match[2]):bytes.length-1;e.respondWith(new Response(bytes.slice(start,end+1),{status:match?206:200,headers:{'Content-Type':'video/mp4','Content-Length':String(end-start+1),...(match?{'Content-Range':'bytes '+start+'-'+end+'/'+bytes.length}:{})}}));});`);
       return;
     }
-    res.end(`<title>Browser-only video fixture</title><video></video><script>(async()=>{await navigator.serviceWorker.register('/sw.js');await navigator.serviceWorker.ready;if(!navigator.serviceWorker.controller)await new Promise(r=>navigator.serviceWorker.addEventListener('controllerchange',r,{once:true}));const video=document.querySelector('video');video.setAttribute('src','https://display-only.invalid/video.mp4');const readable='https://browser-only.invalid/virtual.mp4',alias={toJSON:()=>readable,toString:()=>readable};Object.defineProperty(video,'currentSrc',{get:()=>alias});Object.defineProperty(video,'src',{get:()=>alias});const original=video.getAttribute.bind(video);video.getAttribute=name=>name==='src'?alias:original(name);window.ready=true;})();</script>`);
+    res.end(`<title>Browser-only video fixture</title><video></video><script>(async()=>{await navigator.serviceWorker.register('/sw.js');await navigator.serviceWorker.ready;if(!navigator.serviceWorker.controller)await new Promise(r=>navigator.serviceWorker.addEventListener('controllerchange',r,{once:true}));const video=document.querySelector('video');video.setAttribute('src','https://display-only.invalid/video.mp4');const readable=quality=>'https://browser-only.invalid/virtual.mp4?quality='+quality;window.level=360;const handles=[360,720,1080,1440].map(quality=>({toJSON:()=>readable(quality),toString:()=>readable(quality)}));const alias=()=>handles[[360,720,1080,1440].indexOf(window.level)];Object.defineProperty(video,'currentSrc',{get:alias});Object.defineProperty(video,'src',{get:alias});Object.defineProperty(video,'videoHeight',{get:()=>272});const original=video.getAttribute.bind(video);video.getAttribute=name=>name==='src'?alias():original(name);window.jwplayer=()=>({getQualityLevels:()=>[360,720,1080,1440].map(q=>({label:q+'p'})),getCurrentQuality:()=>[360,720,1080,1440].indexOf(window.level),getPlaylistItem:()=>({sources:handles.map((file,i)=>({file,label:[360,720,1080,1440][i]+'p'}))}),setCurrentQuality:()=>{throw Error('Scanning must not switch playback');}});window.ready=true;})();</script>`);
   });
   let context;
   try {
@@ -31,11 +31,11 @@ async function run(chromium, extensionPath) {
     const page = await context.newPage(); const url = `http://127.0.0.1:${server.address().port}/video`;
     await page.goto(url); await page.waitForFunction(() => window.ready === true);
     await worker.evaluate(() => {
-      pageSources = sourceContext = browserTransfer = true;
+      pageSources = sourceContext = browserTransfer = browserQualities = true;
       globalThis.testStream = { parts: [], bytes: 0, finished: false, cancelled: false, job: 0 };
       request = async (action, data) => {
         if (action === 'inspect') throw new Error('HTTP 403: browser-only Service Worker URL.');
-        if (action === 'prepareBrowser') return { token: 'browser', browser: true, title: data.metadata.title, options: [{ id: 'format', label: 'Original · MP4', bytes: data.metadata.bytes, container: 'mp4' }] };
+        if (action === 'prepareBrowser') return { token: 'browser', browser: true, title: data.metadata.title, options: data.metadata.variants.map((v, i) => ({ id: 'format-' + i, label: v.label + ' · MP4', height: v.height, bytes: v.bytes, container: v.ext })) };
         if (action === 'download') return { id: 'browser-job-' + ++testStream.job, title: 'Browser fixture', status: 'downloading', downloadDir: 'test', percent: 0 };
         if (action === 'browserChunk') {
           if (data.offset !== testStream.bytes) throw new Error('Wrong offset');
@@ -53,7 +53,14 @@ async function run(chromium, extensionPath) {
     const tabId = await worker.evaluate(async () => (await chrome.tabs.query({ active: true, currentWindow: true }))[0].id);
     const media = await worker.evaluate(({ tabId, url }) => handle({ action: 'analyze', tabId, url, scanPlayer: true }), { tabId, url });
     assert.equal(media.browser, true); assert.equal(media.options[0].bytes, bytes.length);
-    await worker.evaluate(() => handle({ action: 'download', token: 'browser', choice: 'format' }));
+    assert.deepEqual(media.options.map(v => v.height), [360, 720, 1080]);
+    assert.match(media.options[0].label, /^360p/); // Advertised 360p, cropped image height 272.
+    assert.equal(await page.evaluate(() => window.level), 360);
+    await assert.rejects(worker.evaluate(() => handle({ action: 'download', token: 'browser', choice: 'missing' })), /اختيار الجودة/);
+    // The player switches after analysis. The requested 720p must remain pinned;
+    // the active 360p has the same byte count but different contents.
+    await page.evaluate(() => { window.level = 1080; });
+    await worker.evaluate(() => handle({ action: 'download', token: 'browser', choice: 'format-1' }));
     for (let attempt = 0; attempt < 100 && !await worker.evaluate(() => testStream.finished || testStream.error); attempt++) await page.waitForTimeout(50);
     const result = await worker.evaluate(async () => {
       const all = new Uint8Array(testStream.bytes); let offset = 0;
@@ -63,18 +70,28 @@ async function run(chromium, extensionPath) {
     });
     assert.equal(result.error, undefined); assert.equal(result.finished, true); assert.equal(result.bytes, bytes.length);
     assert.equal(result.digest, createHash('sha256').update(bytes).digest('hex'));
-    assert.equal(await page.evaluate(() => Object.keys(window).filter(key => key.startsWith('__vidrush_')).length), 0);
+    assert.equal(await page.evaluate(() => Object.keys(window).filter(key => key.startsWith('__vidrush_') && key !== '__vidrush_browser_sources').length), 0);
     for (let attempt = 0; attempt < 30 && await worker.evaluate(() => browserJobs.size > 0); attempt++) await page.waitForTimeout(20);
     await worker.evaluate(() => { testStream.parts = []; testStream.bytes = 0; testStream.finished = false; testStream.hold = true; });
-    const cancelling = await worker.evaluate(() => handle({ action: 'download', token: 'browser', choice: 'format' }));
+    const cancelling = await worker.evaluate(() => handle({ action: 'download', token: 'browser', choice: 'format-1' }));
     for (let attempt = 0; attempt < 100 && !await worker.evaluate(() => !!testStream.release); attempt++) await page.waitForTimeout(20);
     assert.equal(await worker.evaluate(() => !!testStream.release), true);
     await worker.evaluate(jobId => handle({ action: 'cancel', jobId }), cancelling.id);
     await worker.evaluate(() => { testStream.hold = false; testStream.release(); });
     for (let attempt = 0; attempt < 100 && await worker.evaluate(() => browserJobs.size > 0); attempt++) await page.waitForTimeout(20);
     assert.equal(await worker.evaluate(() => testStream.cancelled && !testStream.finished && browserJobs.size === 0), true);
-    assert.equal(await page.evaluate(() => Object.keys(window).filter(key => key.startsWith('__vidrush_')).length), 0);
-    console.log('Browser-only Service Worker fallback preserved file bytes through MAIN-world reads, bounded chunks and acknowledgements.');
+    assert.equal(await page.evaluate(() => Object.keys(window).filter(key => key.startsWith('__vidrush_') && key !== '__vidrush_browser_sources').length), 0);
+    // Ordinary <source> metadata works without a player library, and DRM stays blocked.
+    await page.evaluate(() => {
+      delete window.jwplayer;
+      const source = document.createElement('source'); source.src = 'https://browser-only.invalid/virtual.mp4?quality=720'; source.setAttribute('label', '720p'); document.querySelector('video').append(source);
+    });
+    const dom = await worker.evaluate(async ({ tabId }) => (await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: browserFrameFile, args: ['probe', { key: 'dom', url: 'https://display-only.invalid/video.mp4', videoIndex: 0 }] }))[0].result, { tabId });
+    assert.equal(dom.variants.some(v => v.label === '720p'), true);
+    await page.evaluate(() => Object.defineProperty(document.querySelector('video'), 'mediaKeys', { get: () => ({}) }));
+    const drm = await worker.evaluate(async ({ tabId }) => (await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: browserFrameFile, args: ['probe', { key: 'drm', url: 'https://display-only.invalid/video.mp4', videoIndex: 0 }] }))[0].result, { tabId });
+    assert.match(drm.error, /DRM/);
+    console.log('Browser fallback enumerated readable qualities, preserved advertised labels, pinned the requested non-current file byte-for-byte, cancelled cleanly and rejected DRM.');
   } finally {
     if (context) await context.close(); await new Promise(resolve => server.close(resolve));
     const relative = path.relative(os.tmpdir(), root);

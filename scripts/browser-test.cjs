@@ -117,7 +117,8 @@ async function main() {
           },
         },
         tabs: { query: async () => [{ ...window.currentTab }] },
-        permissions: { request: async value => {
+        permissions: { contains: async value => window.captureState.enabled || !value.origins.includes('https://*/*') && window.allowPlayer === true, request: async value => {
+          window.permissionRequests = (window.permissionRequests || 0) + 1;
           window.requestedOrigins = value.origins;
           if (value.origins.includes('https://*/*')) {
             if (window.allowFull === true) window.captureState.enabled = true;
@@ -309,12 +310,24 @@ async function main() {
     await page.screenshot({ path: path.join(artifacts, 'popup-player.png'), animations: 'disabled' });
     await page.locator('#scan-player').click();
     await page.waitForFunction(() => document.getElementById('notice').textContent.includes('لم يتم السماح'));
-    assert.deepEqual(await page.evaluate(() => window.requestedOrigins), ['https://player.hotmart.com/*']);
-    await page.evaluate(() => { window.allowPlayer = true; });
+    assert.deepEqual(await page.evaluate(() => window.requestedOrigins), ['http://*/*', 'https://*/*']);
+    await page.evaluate(() => { window.allowFull = true; });
     await page.locator('#scan-player').click();
     await page.locator('#video').waitFor({ state: 'visible' });
     assert.equal(await page.locator('#scan-player').isVisible(), false);
     assert.equal(await page.evaluate(() => window.actions.filter(action => action.action === 'analyze').at(-1).scanPlayer), true);
+    const permissionRequests = await page.evaluate(() => window.permissionRequests);
+    await page.evaluate(() => { window.currentTab.url = 'https://another.example/video'; });
+    await page.locator('#refresh').click();
+    await page.locator('#video').waitFor({ state: 'visible' });
+    assert.equal(await page.evaluate(() => window.permissionRequests), permissionRequests, 'Saved access must scan a different website automatically without request().');
+    assert.equal(await page.evaluate(() => window.actions.filter(action => action.action === 'analyze').at(-1).scanPlayer), true);
+    assert.equal(await page.locator('#scan-player').isVisible(), false);
+    // Previously saved per-player access is also reused without broadening it.
+    await page.evaluate(() => { window.captureState.enabled = false; window.allowPlayer = true; window.currentTab.url = 'https://courses.example.com/second'; });
+    await page.locator('#refresh').click();
+    await page.locator('#video').waitFor({ state: 'visible' });
+    assert.equal(await page.evaluate(() => window.permissionRequests), permissionRequests);
     await page.evaluate(() => { window.testMode = 'multiple'; });
     await page.locator('#refresh').click();
     await page.locator('#source-picker').waitFor({ state: 'visible' });

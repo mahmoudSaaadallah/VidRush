@@ -71,7 +71,7 @@ class Companion {
       if (action === 'ping') {
         const version = (await this.run(['--version'], { timeout: 15000 })).trim();
         data = { version, ffmpeg: !!this.config.ffmpegPath, downloadDir: this.config.downloadDir, choosingFolder: this.choosingFolder,
-          protocolVersion: 5, capabilities: { folderPicker: true, openFolder: true, pageSources: true, sourceContext: true, browserTransfer: true } };
+          protocolVersion: 6, capabilities: { folderPicker: true, openFolder: true, pageSources: true, sourceContext: true, browserTransfer: true, browserQualities: true } };
       } else if (action === 'chooseFolder') {
         if (this.choosingFolder) throw new Error('A folder picker is already open. Finish or cancel it first.');
         this.choosingFolder = true;
@@ -129,7 +129,7 @@ class Companion {
           if (!old) break;
           this.jobs.delete(old.id);
         }
-        if (media.browser) this.browserJobs.set(job.id, new BrowserDownload(job, media, value => this.update(value)));
+        if (media.browser) this.browserJobs.set(job.id, new BrowserDownload(job, choice, value => this.update(value)));
         else this.startJob(job, media.url, choice, media.referer, media.context);
         data = this.publicJob(job);
       } else if (action === 'cancel') {

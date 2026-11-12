@@ -103,6 +103,17 @@ test('locked player offers only its optional origin and rescans after permission
   h.respond(h.sent.at(-1), { token: 'ready' }); await retry;
 });
 
+test('a previously authorized player is scanned automatically and is not offered another permission prompt on failure', async () => {
+  const origin = 'https://already-authorized.test/*';
+  const h = harness([], { page: { playerOrigins: [origin] } });
+  h.chrome.permissions.contains = async ({ origins }) => origins.length === 1 && origins[0] === origin;
+  await bootstrap(h);
+  const operation = h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video' });
+  const rejected = assert.rejects(operation, error => error.playerOrigins.length === 0);
+  await tick(); h.callbacks.message({ id: h.sent.at(-1).id, ok: false, error: 'Unsupported page URL' });
+  await rejected;
+});
+
 test('navigation during fallback and an outdated companion cannot produce a stale or unsupported selection', async () => {
   const h = harness(); await bootstrap(h);
   const operation = h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video' });
