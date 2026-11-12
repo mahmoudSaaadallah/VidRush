@@ -20,18 +20,20 @@ function buildMedia(info, hasFfmpeg) {
   const formats = (info.formats || []).filter(f => f.format_id && !f.has_drm);
   // Generic/direct MP4 extractors can leave codec fields unknown. Only the explicit
   // sentinel "none" proves that a track is missing.
-  const videos = formats.filter(f => f.vcodec !== 'none' && f.ext !== 'mhtml' && f.url);
-  const audio = formats.filter(f => f.acodec && f.acodec !== 'none' && f.vcodec === 'none' && f.url);
+  const isAudio = f => (f.vcodec === 'none' || !f.vcodec) && f.url && (f.acodec ? f.acodec !== 'none' : (f.resolution === 'audio only' || (f.audio_ext && f.audio_ext !== 'none') || /audio/i.test(f.format_note || '') || /audio/i.test(f.format_id || '')));
+  const isVideo = f => f.vcodec !== 'none' && f.ext !== 'mhtml' && f.url && f.resolution !== 'audio only';
+  const videos = formats.filter(isVideo);
+  const audio = formats.filter(isAudio);
   const choices = new Map();
   for (const video of videos) {
-    const needsMerge = video.acodec === 'none';
+    const needsMerge = video.acodec === 'none' || video.audio_ext === 'none';
     if (needsMerge && (!hasFfmpeg || !audio.length)) continue;
     const candidates = [...audio].sort((a, b) => {
-      const preferred = video.ext === 'mp4' ? 'm4a' : 'webm';
-      return Number(b.ext === preferred) - Number(a.ext === preferred) || (b.abr || b.tbr || 0) - (a.abr || a.tbr || 0);
+      const preferred = video.ext === 'mp4' ? (['m4a', 'mp4', 'aac'].includes(b.ext) - ['m4a', 'mp4', 'aac'].includes(a.ext)) : Number(b.ext === 'webm') - Number(a.ext === 'webm');
+      return preferred || (b.source_preference ?? 0) - (a.source_preference ?? 0) || (b.abr || b.tbr || 0) - (a.abr || a.tbr || 0);
     });
     const selectedAudio = needsMerge ? candidates[0] : null;
-    const container = needsMerge ? (video.ext === 'mp4' && selectedAudio.ext === 'm4a' ? 'mp4' : 'mkv') : video.ext;
+    const container = needsMerge ? (video.ext === 'mp4' && ['m4a', 'mp4', 'aac'].includes(selectedAudio?.ext) ? 'mp4' : 'mkv') : video.ext;
     const height = video.height || 0;
     const fps = Math.round(video.fps || 0);
     const key = `${height}:${fps}:${container}`;
