@@ -31,11 +31,12 @@ async function run(chromium, extensionPath) {
     const page = await context.newPage(); const url = `http://127.0.0.1:${server.address().port}/video`;
     await page.goto(url); await page.waitForFunction(() => window.ready === true);
     await worker.evaluate(() => {
-      pageSources = sourceContext = browserTransfer = browserQualities = true;
-      globalThis.testStream = { parts: [], bytes: 0, finished: false, cancelled: false, job: 0 };
+      pageSources = sourceContext = browserTransfer = browserQualities = analysisCache = true;
+      globalThis.testStream = { parts: [], bytes: 0, finished: false, cancelled: false, job: 0, inspections: 0, preparations: 0 };
       request = async (action, data) => {
-        if (action === 'inspect') throw new Error('HTTP 403: browser-only Service Worker URL.');
-        if (action === 'prepareBrowser') return { token: 'browser', browser: true, title: data.metadata.title, options: data.metadata.variants.map((v, i) => ({ id: 'format-' + i, label: v.label + ' · MP4', height: v.height, bytes: v.bytes, container: v.ext })) };
+        if (action === 'inspect') { testStream.inspections++; throw new Error('HTTP 403: browser-only Service Worker URL.'); }
+        if (action === 'cachedMedia') return { available: true };
+        if (action === 'prepareBrowser') { testStream.preparations++; return { token: 'browser', browser: true, title: data.metadata.title, options: data.metadata.variants.map((v, i) => ({ id: 'format-' + i, label: v.label + ' · MP4', height: v.height, bytes: v.bytes, container: v.ext })) }; }
         if (action === 'download') return { id: 'browser-job-' + ++testStream.job, title: 'Browser fixture', status: 'downloading', downloadDir: 'test', percent: 0 };
         if (action === 'browserChunk') {
           if (data.offset !== testStream.bytes) throw new Error('Wrong offset');
@@ -56,6 +57,10 @@ async function run(chromium, extensionPath) {
     assert.deepEqual(media.options.map(v => v.height), [360, 720, 1080]);
     assert.match(media.options[0].label, /^360p/); // Advertised 360p, cropped image height 272.
     assert.equal(await page.evaluate(() => window.level), 360);
+    const inspections = await worker.evaluate(() => testStream.inspections);
+    const reopened = await worker.evaluate(({ tabId, url }) => handle({ action: 'analyze', tabId, url }), { tabId, url });
+    assert.deepEqual(reopened.options, media.options);
+    assert.equal(await worker.evaluate(() => testStream.inspections), inspections);
     await assert.rejects(worker.evaluate(() => handle({ action: 'download', token: 'browser', choice: 'missing' })), /اختيار الجودة/);
     // The player switches after analysis. The requested 720p must remain pinned;
     // the active 360p has the same byte count but different contents.
@@ -70,7 +75,13 @@ async function run(chromium, extensionPath) {
     });
     assert.equal(result.error, undefined); assert.equal(result.finished, true); assert.equal(result.bytes, bytes.length);
     assert.equal(result.digest, createHash('sha256').update(bytes).digest('hex'));
-    assert.equal(await page.evaluate(() => Object.keys(window).filter(key => key.startsWith('__vidrush_') && key !== '__vidrush_browser_sources').length), 0);
+    assert.equal(await page.evaluate(() => Object.keys(window).filter(key => key.startsWith('__vidrush_') && !['__vidrush_browser_sources', '__vidrush_player_identity'].includes(key)).length), 0);
+    await page.evaluate(() => window.__vidrush_browser_sources.clear());
+    await worker.evaluate(({ tabId, url }) => handle({ action: 'analyze', tabId, url }), { tabId, url });
+    assert.equal(await worker.evaluate(() => testStream.preparations), 2, 'An evicted browser catalogue must be prepared again instead of reusing an unreadable choice.');
+    await worker.evaluate(() => browserSources.clear());
+    await worker.evaluate(({ tabId, url }) => handle({ action: 'analyze', tabId, url }), { tabId, url });
+    assert.equal(await worker.evaluate(() => testStream.preparations), 3, 'An evicted transfer binding must not return a browser choice that can no longer feed its native job.');
     for (let attempt = 0; attempt < 30 && await worker.evaluate(() => browserJobs.size > 0); attempt++) await page.waitForTimeout(20);
     await worker.evaluate(() => { testStream.parts = []; testStream.bytes = 0; testStream.finished = false; testStream.hold = true; });
     const cancelling = await worker.evaluate(() => handle({ action: 'download', token: 'browser', choice: 'format-1' }));
@@ -80,7 +91,7 @@ async function run(chromium, extensionPath) {
     await worker.evaluate(() => { testStream.hold = false; testStream.release(); });
     for (let attempt = 0; attempt < 100 && await worker.evaluate(() => browserJobs.size > 0); attempt++) await page.waitForTimeout(20);
     assert.equal(await worker.evaluate(() => testStream.cancelled && !testStream.finished && browserJobs.size === 0), true);
-    assert.equal(await page.evaluate(() => Object.keys(window).filter(key => key.startsWith('__vidrush_') && key !== '__vidrush_browser_sources').length), 0);
+    assert.equal(await page.evaluate(() => Object.keys(window).filter(key => key.startsWith('__vidrush_') && !['__vidrush_browser_sources', '__vidrush_player_identity'].includes(key)).length), 0);
     // Ordinary <source> metadata works without a player library, and DRM stays blocked.
     await page.evaluate(() => {
       delete window.jwplayer;

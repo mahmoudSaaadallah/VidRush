@@ -7,6 +7,7 @@ const path = require('node:path');
 
 function harness(initialJobs = [], options = {}) {
   const sent = [], stored = {}, callbacks = {};
+  const identity = { value: 'unchanged-player', documentId: 'main-document' };
   const port = {
     onMessage: { addListener(fn) { callbacks.message = fn; } },
     onDisconnect: { addListener(fn) { callbacks.disconnect = fn; } },
@@ -21,19 +22,21 @@ function harness(initialJobs = [], options = {}) {
     tabs: { get: async id => ({ id, url: 'https://example.com/video' }), onRemoved: { addListener(fn) { callbacks.tabRemoved = fn; } }, onUpdated: { addListener(fn) { callbacks.tabUpdated = fn; } } },
     permissions: { contains: async () => options.full === true, onRemoved: { addListener(fn) { callbacks.revoked = fn; } } },
     webRequest: Object.fromEntries(['onBeforeRequest', 'onBeforeSendHeaders', 'onResponseStarted', 'onCompleted', 'onErrorOccurred'].map(name => [name, { addListener(fn) { callbacks[name] = fn; } }])),
-    scripting: { executeScript: async () => [{ frameId: 0, result: { pageUrl: 'https://example.com/video', sources: [], playerOrigins: [], ...options.page } }, ...(options.frames || [])] },
+    scripting: { executeScript: async script => script.func.name === 'snapshotPlayerIdentity'
+      ? [{ frameId: script.target.frameIds?.[0] || 0, documentId: identity.documentId, result: identity.value }]
+      : [{ frameId: 0, result: { pageUrl: 'https://example.com/video', sources: [], playerOrigins: [], ...options.page } }, ...(options.frames || [])] },
   };
   const context = vm.createContext({ chrome, setTimeout, clearTimeout, console, URL,
     importScripts: filename => vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'extension', filename), 'utf8'), context) });
   vm.runInContext(`${fs.readFileSync(path.join(__dirname, '..', 'extension', 'background.js'), 'utf8')}\nglobalThis.api = { handle };`, context);
   const respond = (message, data) => callbacks.message({ id: message.id, ok: true, data });
-  return { api: context.api, sent, stored, callbacks, respond, chrome };
+  return { api: context.api, sent, stored, callbacks, respond, chrome, identity };
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 async function bootstrap(h, pageSources = true) {
   const operation = h.api.handle({ action: 'bootstrap' });
-  await tick(); h.respond(h.sent.at(-1), { capabilities: { pageSources, sourceContext: true } });
+  await tick(); h.respond(h.sent.at(-1), { capabilities: { pageSources, sourceContext: true, analysisCache: true } });
   await tick(); h.respond(h.sent.at(-1), []);
   await operation;
 }
@@ -140,6 +143,85 @@ test('worker reuses an in-flight analysis across popup openings and correlates r
   assert.equal((await first).token, 'first-tab');
   assert.equal((await second).token, 'first-tab');
   assert.equal((await another).token, 'second-tab');
+});
+
+test('a completed analysis survives unrelated capture traffic and popup reopening without inspecting again', async () => {
+  const h = harness([], { full: true }); await bootstrap(h);
+  const analyze = () => h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video' });
+  const first = analyze(); await tick(); h.respond(h.sent.at(-1), { token: 'cached', options: [{ id: '720' }] }); await first;
+  const request = { requestId: 'ad', tabId: 1, frameId: 44, type: 'media', method: 'GET', url: 'https://cdn.test/ad.mp4' };
+  h.callbacks.onBeforeRequest(request);
+  h.callbacks.onResponseStarted({ ...request, statusCode: 206 });
+  h.callbacks.onBeforeRequest({ ...request, requestId: 'ad-frame', type: 'sub_frame', url: 'https://ads.test/new' });
+  await tick();
+  const reopened = analyze(); await tick();
+  assert.equal(h.sent.at(-1).action, 'cachedMedia'); h.respond(h.sent.at(-1), { available: true });
+  assert.equal((await reopened).token, 'cached');
+  assert.equal(h.sent.filter(message => message.action === 'inspect').length, 1);
+});
+
+test('capture events during an in-flight scan do not detach it when the popup reopens', async () => {
+  const h = harness([], { full: true }); await bootstrap(h);
+  const analyze = () => h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video' });
+  const first = analyze(); await tick();
+  h.callbacks.onBeforeRequest({ requestId: 'frame', type: 'sub_frame', tabId: 1, frameId: 17, url: 'https://ad.test/' });
+  const reopened = analyze(); await tick();
+  assert.equal(h.sent.filter(message => message.action === 'inspect').length, 1);
+  h.respond(h.sent.at(-1), { token: 'shared-inspection' });
+  assert.equal((await first).token, 'shared-inspection'); assert.equal((await reopened).token, 'shared-inspection');
+});
+
+test('a new video or document at the same URL, and explicit Refresh, require fresh analysis', async () => {
+  const h = harness(); await bootstrap(h);
+  const analyze = refresh => h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video', refresh });
+  const complete = async (operation, token) => { await tick(); assert.equal(h.sent.at(-1).action, 'inspect'); h.respond(h.sent.at(-1), { token }); return operation; };
+  await complete(analyze(), 'first');
+  h.identity.value = 'different-video'; await complete(analyze(), 'next-video');
+  h.identity.documentId = 'reloaded-document'; await complete(analyze(), 'reloaded');
+  await complete(analyze(true), 'refreshed');
+  assert.equal(h.sent.filter(message => message.action === 'inspect').length, 4);
+});
+
+test('an evicted companion token produces one shared rescan for concurrent popup requests', async () => {
+  const h = harness(); await bootstrap(h);
+  const analyze = () => h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video' });
+  const first = analyze(); await tick(); h.respond(h.sent.at(-1), { token: 'expired' }); await first;
+  const a = analyze(), b = analyze(); await tick();
+  assert.equal(h.sent.filter(message => message.action === 'cachedMedia').length, 1);
+  h.respond(h.sent.at(-1), { available: false }); await tick();
+  assert.equal(h.sent.filter(message => message.action === 'inspect').length, 2);
+  h.respond(h.sent.at(-1), { token: 'renewed' });
+  assert.equal((await a).token, 'renewed'); assert.equal((await b).token, 'renewed');
+});
+
+test('a selected embedded source remains selected when reopening the popup', async () => {
+  const h = harness([], { page: { sources: [{ url: 'https://cdn.test/first.mp4' }, { url: 'https://cdn.test/second.mp4' }] } }); await bootstrap(h);
+  const first = h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video', scanPlayer: true });
+  await tick(); h.respond(h.sent.at(-1), { token: 'first' }); await first;
+  const selection = h.api.handle({ action: 'selectSource', tabId: 1, url: 'https://example.com/video', sourceIndex: 1 });
+  await tick(); h.respond(h.sent.at(-1), { token: 'selected' }); await selection;
+  const reopened = h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video' });
+  await tick(); h.respond(h.sent.at(-1), { available: true });
+  const media = await reopened;
+  assert.equal(media.token, 'selected'); assert.equal(media.sourceIndex, 1);
+});
+
+test('a player changed during inspection cannot enter the result cache', async () => {
+  const h = harness(); await bootstrap(h);
+  const operation = h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video' });
+  const rejected = assert.rejects(operation, /تغيّر الفيديو أثناء الفحص/);
+  await tick(); h.identity.value = 'another-player'; h.respond(h.sent.at(-1), { token: 'stale' });
+  await rejected;
+});
+
+test('a video changed during cached-token validation is rescanned before showing any old result', async () => {
+  const h = harness(); await bootstrap(h);
+  const analyze = () => h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video' });
+  const first = analyze(); await tick(); h.respond(h.sent.at(-1), { token: 'old' }); await first;
+  const reopened = analyze(); await tick(); assert.equal(h.sent.at(-1).action, 'cachedMedia');
+  h.identity.value = 'new-video'; h.respond(h.sent.at(-1), { available: true }); await tick();
+  assert.equal(h.sent.at(-1).action, 'inspect'); h.respond(h.sent.at(-1), { token: 'current' });
+  assert.equal((await reopened).token, 'current');
 });
 
 test('worker checks the active tab URL before passing it to the native companion', async () => {

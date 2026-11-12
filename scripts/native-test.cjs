@@ -114,11 +114,14 @@ async function main() {
     assert.ok(probe.streams.some(stream => stream.codec_type === 'audio'));
     assert.equal(ping.capabilities.browserTransfer, true);
     assert.equal(ping.capabilities.browserQualities, true);
+    assert.equal(ping.capabilities.analysisCache, true);
     const browser = await request('prepareBrowser', { metadata: { title: 'Browser-streamed original test video', variants: [
       { ext: 'webm', bytes: 16, height: 180, label: '180p' },
       { ext: 'mp4', bytes: payload.length, height: 360, label: '360p' },
     ] } });
     assert.equal(browser.options.length, 2);
+    assert.deepEqual(await request('cachedMedia', { token: browser.token }), { available: true });
+    assert.deepEqual(await request('cachedMedia', { token: 'expired-selection' }), { available: false });
     const browserJob = await request('download', { token: browser.token, choice: browser.options[1].id });
     assert.match(browserJob.quality, /^360p/);
     for (let offset = 0; offset < payload.length; offset += 65536) {

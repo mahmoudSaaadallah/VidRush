@@ -16,6 +16,7 @@ async function browserFrameFile(action, options) {
   const currentSource = () => getVideo()?.currentSrc || url;
   const rangeTotal = response => Number(response.headers.get('content-range')?.match(/\/(\d+)$/)?.[1] || response.headers.get('content-length'));
   if (action !== 'cancel' && getVideo()?.mediaKeys) throw new Error('DRM-protected videos are unsupported.');
+  if (action === 'available') return { available: !!window.__vidrush_browser_sources?.get(catalogId)?.length };
   if (action === 'probe') {
     const video = getVideo();
     const candidates = [];

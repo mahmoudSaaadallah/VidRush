@@ -69,9 +69,16 @@ class Companion {
     try {
       let data;
       if (action === 'ping') {
-        const version = (await this.run(['--version'], { timeout: 15000 })).trim();
+        this.versionPromise ||= this.run(['--version'], { timeout: 15000 }).then(version => version.trim()).catch(error => { this.versionPromise = null; throw error; });
+        const version = await this.versionPromise;
         data = { version, ffmpeg: !!this.config.ffmpegPath, downloadDir: this.config.downloadDir, choosingFolder: this.choosingFolder,
-          protocolVersion: 6, capabilities: { folderPicker: true, openFolder: true, pageSources: true, sourceContext: true, browserTransfer: true, browserQualities: true } };
+          protocolVersion: 7, capabilities: { folderPicker: true, openFolder: true, pageSources: true, sourceContext: true, browserTransfer: true, browserQualities: true, analysisCache: true } };
+      } else if (action === 'cachedMedia') {
+        const media = this.media.get(message.token);
+        if (media) { this.media.delete(message.token); this.media.set(message.token, media); }
+        // Confirm the token still belongs to this companion without running yt-dlp
+        // or returning its signed URL, referrer, or request headers.
+        data = { available: !!media };
       } else if (action === 'chooseFolder') {
         if (this.choosingFolder) throw new Error('A folder picker is already open. Finish or cancel it first.');
         this.choosingFolder = true;

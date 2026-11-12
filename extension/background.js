@@ -3,6 +3,7 @@
 importScripts('discovery.js');
 importScripts('capture.js');
 importScripts('browser-transfer.js');
+importScripts('player-identity.js');
 
 const HOST = 'com.vidrush.companion';
 let nativePort;
@@ -11,6 +12,7 @@ let pageSources = false;
 let sourceContext = false;
 let browserTransfer = false;
 let browserQualities = false;
+let analysisCache = false;
 let capturePaused = false;
 const pending = new Map();
 const analyses = new Map();
@@ -19,7 +21,9 @@ const browserSources = new Map();
 const browserJobs = new Map();
 const capture = new CaptureSession({
   save: value => { void chrome.storage.session.set({ captureSession: value }).catch(() => {}); },
-  changed: (tabId, reset) => { analyses.delete(tabId); if (reset) sourceChoices.delete(tabId); },
+  // Capture traffic is not player identity: advertisements and later byte ranges
+  // must not discard successful results (or detach an in-flight inspection).
+  changed: (tabId, reset) => { if (reset && !analyses.has(tabId)) sourceChoices.delete(tabId); },
 });
 let jobs = [];
 let destination = { downloadDir: '', choosingFolder: false };
@@ -43,7 +47,7 @@ for (const event of [chrome.webRequest.onCompleted, chrome.webRequest.onErrorOcc
 chrome.permissions.onRemoved.addListener(() => { void chrome.permissions.contains({ origins: SCAN_ORIGINS }).then(granted => { if (!granted) capture.stop(); }); });
 chrome.tabs.onUpdated.addListener((tabId, change) => {
   if (!change.url) return;
-  analyses.delete(tabId); sourceChoices.delete(tabId);
+  if (analyses.get(tabId)?.url !== change.url) { analyses.delete(tabId); sourceChoices.delete(tabId); }
   if (capture.session?.url !== change.url) capture.navigate(tabId, change.url);
 });
 
@@ -58,9 +62,48 @@ function withSourceChoices(media, set, selected) {
     label: (source.kind === 'hls' ? 'HLS' : source.kind === 'dash' ? 'DASH' : source.kind === 'file' ? 'فيديو' : 'مشغّل') + ' · ' + new URL(source.url).hostname + ' · ' + (index + 1) })) };
 }
 
-async function inspectSource(tabId, url, set, index) {
+async function readIdentity(scope) {
+  try {
+    const [frame] = await chrome.scripting.executeScript({ target: scope.target, world: 'MAIN', func: snapshotPlayerIdentity, args: [scope.videoIndex ?? null] });
+    return typeof frame?.result === 'string' ? JSON.stringify([frame.documentId, frame.frameId, frame.result]) : null;
+  } catch { return null; }
+}
+
+function startAnalysis(tabId, url, inspect) {
+  const entry = { url, scope: { target: { tabId, frameIds: [0] } } };
+  entry.promise = (async () => {
+    entry.identity = await readIdentity(entry.scope);
+    const media = await inspect(entry);
+    if (entry.identity && entry.identity !== await readIdentity(entry.scope)) throw new Error('تغيّر الفيديو أثناء الفحص. اضغط تحديث للفيديو الحالي.');
+    entry.media = media;
+    if (Number.isInteger(media.sourceIndex)) entry.sources = sourceChoices.get(tabId);
+    return media;
+  })();
+  analyses.set(tabId, entry);
+  entry.promise.catch(() => { if (analyses.get(tabId) === entry) analyses.delete(tabId); });
+  if (analyses.size > 8) analyses.delete(analyses.keys().next().value);
+  return entry;
+}
+
+async function reuseAnalysis(entry) {
+  if (!analysisCache || !entry.identity || entry.identity !== await readIdentity(entry.scope)) return false;
+  if (!(await request('cachedMedia', { token: entry.media.token })).available) return false;
+  const source = browserSources.get(entry.media.token);
+  if (entry.media.browser && !source) return false;
+  if (source) {
+    const [frame] = await chrome.scripting.executeScript({ target: source.target, world: 'MAIN', func: browserFrameFile, args: ['available', { url: source.url, videoIndex: source.videoIndex, catalogId: source.catalogId }] });
+    if (!frame?.result?.available) return false;
+  }
+  return entry.identity === await readIdentity(entry.scope);
+}
+
+async function inspectSource(tabId, url, set, index, entry) {
   const source = set.sources[index];
   if (!source || (await chrome.tabs.get(tabId)).url !== url) throw new Error('تغيّرت الصفحة أو انتهت نتائج الفحص. اضغط تحديث.');
+  if (entry) {
+    entry.scope = { target: { tabId, ...(source.documentId ? { documentIds: [source.documentId] } : { frameIds: [source.frameId || 0] }) }, videoIndex: source.videoIndex };
+    entry.identity = await readIdentity(entry.scope);
+  }
   const context = sourceContext ? { userAgent: source.userAgent, origin: source.origin } : {};
   let media;
   try { media = await request('inspect', { url: source.url, referer: source.referer, title: source.title, ...context }); }
@@ -139,6 +182,7 @@ function connect() {
       void chrome.scripting.executeScript({ target: task.target, world: 'MAIN', func: browserFrameFile, args: ['cancel', { key: task.key, url: task.url }] }).catch(() => {});
     }
     analyses.clear();
+    sourceChoices.clear(); browserSources.clear();
     const error = new Error(`تعذّر الاتصال بالبرنامج المساعد. شغّل Install.cmd ثم أعد المحاولة.${detail ? ` (${detail})` : ''}`);
     for (const request of pending.values()) { clearTimeout(request.timer); request.reject(error); }
     pending.clear();
@@ -162,7 +206,7 @@ function request(action, data = {}, timeout = 100000) {
   });
 }
 
-async function inspectTab(tabId, url, scanOnly = false) {
+async function inspectTab(tabId, url, scanOnly = false, entry) {
   let originalError;
   if (!scanOnly) {
     let media;
@@ -202,7 +246,7 @@ async function inspectTab(tabId, url, scanOnly = false) {
     const latest = await chrome.tabs.get(tabId);
     if (latest.url !== url) throw new Error('تغيّرت الصفحة أثناء الفحص. اضغط تحديث على الفيديو الجديد.');
     let media;
-    try { media = await inspectSource(tabId, url, set, index); }
+    try { media = await inspectSource(tabId, url, set, index, entry); }
     catch (error) { sourceError ||= error; continue; }
     if ((await chrome.tabs.get(tabId)).url !== url) throw new Error('تغيّرت الصفحة أثناء الفحص. اضغط تحديث على الفيديو الجديد.');
     return media;
@@ -236,6 +280,7 @@ async function handle(message) {
     sourceContext = companion.capabilities?.sourceContext === true;
     browserTransfer = companion.capabilities?.browserTransfer === true;
     browserQualities = companion.capabilities?.browserQualities === true;
+    analysisCache = companion.capabilities?.analysisCache === true;
     if (epoch === destinationEpoch) await saveDestination({ downloadDir: companion.downloadDir, choosingFolder: !!companion.choosingFolder });
     const current = await request('status');
     for (const job of current) {
@@ -253,16 +298,28 @@ async function handle(message) {
     if (message.action === 'selectSource') {
       const set = sourceChoices.get(message.tabId);
       if (!set || set.url !== tab.url || !Number.isInteger(message.sourceIndex)) throw new Error('انتهت نتائج الفحص. اضغط تحديث.');
-      return inspectSource(message.tabId, tab.url, set, message.sourceIndex);
+      return startAnalysis(message.tabId, tab.url, entry => inspectSource(message.tabId, tab.url, set, message.sourceIndex, entry)).promise;
     }
     if (!capturePaused && (await scanStatus(message.tabId)).enabled) capture.select(message.tabId, tab.url);
     let entry = analyses.get(message.tabId);
     if (message.refresh || entry?.url !== message.url) entry = null;
+    if (entry?.media) {
+      // Concurrent popup openings share this validation and any required rescan.
+      entry.validation ||= reuseAnalysis(entry).catch(() => false).finally(() => { delete entry.validation; });
+      const reusable = await entry.validation;
+      if ((await chrome.tabs.get(message.tabId)).url !== message.url) throw new Error('تغيّرت الصفحة. أعد فتح الإضافة.');
+      if (analyses.get(message.tabId) !== entry) entry = analyses.get(message.tabId);
+      else if (reusable) {
+        analyses.delete(message.tabId); analyses.set(message.tabId, entry);
+        if (entry.sources) {
+          sourceChoices.delete(message.tabId); sourceChoices.set(message.tabId, entry.sources);
+          if (sourceChoices.size > 8) sourceChoices.delete(sourceChoices.keys().next().value);
+        }
+        return entry.media;
+      } else entry = null;
+    }
     if (!entry) {
-      entry = { url: message.url, promise: inspectTab(message.tabId, message.url, message.scanPlayer === true) };
-      analyses.set(message.tabId, entry);
-      entry.promise.catch(() => { if (analyses.get(message.tabId) === entry) analyses.delete(message.tabId); });
-      if (analyses.size > 8) analyses.delete(analyses.keys().next().value);
+      entry = startAnalysis(message.tabId, message.url, current => inspectTab(message.tabId, message.url, message.scanPlayer === true, current));
     }
     return entry.promise;
   }

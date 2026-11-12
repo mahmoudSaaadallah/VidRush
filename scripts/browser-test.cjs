@@ -399,6 +399,7 @@ async function main() {
     await context.close();
     await require('./discovery-browser-test.cjs').run(chromium, extensionPath);
     await require('./browser-transfer-browser-test.cjs').run(chromium, extensionPath);
+    await require('./analysis-cache-browser-test.cjs').run(chromium, extensionPath);
   } finally {
     if (server) await new Promise(resolve => server.close(resolve));
     await context.close();
