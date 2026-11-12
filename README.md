@@ -184,6 +184,16 @@ Use VidRush for videos you own or have permission to download.
 
 ## Update
 
+### Check which version is installed
+
+The bottom of the VidRush popup shows its installed extension version, for example **v0.2.0**, even if the companion is disconnected. Chrome also shows it on VidRush's card at `chrome://extensions`. The nearby **yt-dlp** number belongs to the separate download engine.
+
+Every delivered update receives a higher extension version. Fixes use a patch bump (for example, 0.2.0 → 0.2.1); new features use a minor bump (0.2.1 → 0.3.0). Pull request checks reject an unchanged or lower version and mismatched project version files.
+
+Updating the source folder or merging a PR alone does not change the installed copy. Run **Update.cmd**, finish active downloads, then click **Reload** on VidRush at `chrome://extensions`. Reopen VidRush and check the displayed version to confirm the update was activated.
+
+### Apply an update
+
 **For extension/companion code updates, including folder-button fixes:**
 
 1. Get the latest project files (`git pull`, or download and extract a fresh ZIP).
