@@ -9,7 +9,7 @@ const { validateUrl, buildMedia, publicMedia, baseArgs, downloadArgs, sourceArgs
 const { selectFolder, saveDownloadDirectory } = require('./folders.cjs');
 const { openFolder } = require('./open-folder.cjs');
 const { browserMedia, BrowserDownload } = require('./browser-download.cjs');
-const { isAmbiguousDirectFile, missingTracks, readTracks, trackProbeArgs } = require('./tracks.cjs');
+const { clearHlsSamples, isAmbiguousDirectFile, isAmbiguousHlsPlaylist, missingTracks, readTracks, trackProbeArgs } = require('./tracks.cjs');
 
 class Companion {
   constructor(config, emit, spawnProcess = spawn, options = {}) {
@@ -58,15 +58,26 @@ class Companion {
 
   async probeTracks(input, network) {
     const executable = path.join(this.config.ffmpegPath, process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe');
-    return readTracks(await this.run(trackProbeArgs(input, network), { executable, timeout: 8000 }));
+    const timeout = network?.ext === 'ts' ? 5000 : 8000;
+    return readTracks(await this.run(trackProbeArgs(input, network), { executable, timeout }));
   }
 
-  async resolveDirectTracks(info, context) {
+  async resolveAmbiguousTracks(info, context) {
     if (!this.config.ffmpegPath || info.has_drm || !Array.isArray(info.formats)) return;
-    const candidates = info.formats.filter(isAmbiguousDirectFile).slice(0, 2);
+    const candidates = info.formats.filter(format => isAmbiguousDirectFile(format) || isAmbiguousHlsPlaylist(format)).slice(0, 2);
     await Promise.all(candidates.map(async format => {
       let tracks;
-      try { tracks = await this.probeTracks(validateUrl(format.url), { ...context, ext: format.ext }); }
+      try {
+        const url = validateUrl(format.url);
+        if (isAmbiguousHlsPlaylist(format)) {
+          const samples = await clearHlsSamples(url, context);
+          if (!samples.length) return;
+          const results = await Promise.all(samples.map(segment => this.probeTracks(validateUrl(segment), { ...context, ext: 'ts' })));
+          tracks = { video: results.find(result => result.video)?.video, audio: results.find(result => result.audio)?.audio };
+        } else {
+          tracks = await this.probeTracks(url, { ...context, ext: format.ext });
+        }
+      }
       catch (error) {
         if (error.code === 'DRM_PROTECTED') format.has_drm = true;
         // Some servers reject a separate metadata request. Validate the saved file instead.
@@ -82,6 +93,20 @@ class Companion {
     if (!this.config.ffmpegPath) return;
     const { video, audio } = await this.probeTracks(file);
     if (!video || !audio) throw missingTracks();
+  }
+
+  async describeDownloadError(error, input) {
+    if (!/\bPostprocessing:/i.test(error.message)) return error.message;
+    if (this.config.ffmpegPath && input) {
+      try {
+        if (fs.lstatSync(input).isFile()) {
+          const { video, audio } = await this.probeTracks(input);
+          if (video && !audio) return 'The downloaded source has no readable audio track. Refresh VidRush and choose another detected source if available.';
+          if (audio && !video) return 'The downloaded source has no readable video track. Refresh VidRush and choose another detected source if available.';
+        }
+      } catch { /* Preserve the postprocessing error if the input cannot be verified. */ }
+    }
+    return 'FFmpeg could not finish the downloaded file.\n' + error.message;
   }
 
   stop(child) {
@@ -131,7 +156,7 @@ class Companion {
           // Generic extractors wrap a single embedded video in a playlist result.
           // Do not expand real playlists, unresolved entries, or multiple videos.
           if (info.entries?.length === 1 && info.entries[0]?.formats) info = info.entries[0];
-          await this.resolveDirectTracks(info, { ...context, referer: message.referer });
+          await this.resolveAmbiguousTracks(info, { ...context, referer: message.referer });
           const media = buildMedia(info, !!this.config.ffmpegPath);
           if (message.referer && typeof message.title === 'string' && message.title.trim()) media.title = message.title.trim().slice(0, 300);
           this.media.set(media.token, { ...media, url, referer: message.referer, context });
@@ -207,6 +232,8 @@ class Companion {
 
   startJob(job, url, choice, referer, context) {
     job.downloadDir ||= this.config.downloadDir;
+    let input;
+    const outputDirectory = path.resolve(job.downloadDir);
     const onLine = line => {
       if (!['downloading', 'processing'].includes(job.status)) return;
       if (line.startsWith('VIDRUSH_PROGRESS:')) {
@@ -219,11 +246,13 @@ class Companion {
           job.status = progress.status === 'finished' ? 'processing' : 'downloading';
           this.update(job);
         } catch { /* Ignore a malformed progress line from an extractor. */ }
-      } else if (line.startsWith('VIDRUSH_FILE:')) {
+      } else if (line.startsWith('VIDRUSH_INPUT:') || line.startsWith('VIDRUSH_FILE:')) {
         try {
-          const outputPath = path.resolve(JSON.parse(line.slice('VIDRUSH_FILE:'.length)));
-          const relative = path.relative(path.resolve(job.downloadDir), outputPath);
-          if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) job.filename = path.basename(outputPath);
+          const outputPath = path.resolve(JSON.parse(line.slice(line.indexOf(':') + 1)));
+          const relative = path.relative(outputDirectory, outputPath);
+          if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || relative !== path.basename(relative)) return;
+          if (line.startsWith('VIDRUSH_INPUT:')) input = outputPath;
+          else job.filename = relative;
         } catch { /* Completion still works if the extractor omits the filename. */ }
       }
     };
@@ -241,9 +270,11 @@ class Companion {
       job.status = 'completed'; job.percent = 100;
       delete job.speed; delete job.eta;
       this.update(job);
-    }).catch(error => {
+    }).catch(async error => {
       if (job.status === 'cancelled') return;
-      job.status = 'failed'; job.error = safeError(error.message).slice(-2000);
+      const detail = await this.describeDownloadError(error, input);
+      if (job.status === 'cancelled') return;
+      job.status = 'failed'; job.error = safeError(detail).slice(-2000);
       this.update(job);
     });
   }

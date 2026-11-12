@@ -99,6 +99,7 @@ function safeError(value) {
 function downloadArgs(config, url, choice, referer, context) {
   const args = [...baseArgs(config), '--newline', '--progress', '--progress-delta', '0.5',
     '--progress-template', 'download:VIDRUSH_PROGRESS:%(progress)j',
+    '--print', 'before_dl:VIDRUSH_INPUT:%(filename)j',
     '--print', 'after_move:VIDRUSH_FILE:%(filepath)j', '--no-simulate',
     '--windows-filenames', '--trim-filenames', '180', '--no-overwrites',
     '--paths', config.downloadDir, '--output', '%(title).120B [%(id)s] [%(format_id)s].%(ext)s',

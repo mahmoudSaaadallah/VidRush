@@ -131,6 +131,8 @@ File names include the source video ID and format IDs, so different qualities of
 
 An MP4 file can contain audio only or video only. When yt-dlp leaves the codecs unknown for a direct MP4 or WebM, the companion checks the tracks with the bundled FFmpeg tools. It also checks each saved download before marking it **Completed**. If a track is missing, the job shows an error. A failed download may leave a file in the save folder.
 
+For a standalone, unencrypted HLS playlist with unknown codecs, the companion checks a small sample from the source before offering it. Some streams announce an audio track without supplying readable sound. If a sampled source has an incomplete track, VidRush tries other detected sources. If the download changes after scanning and FFmpeg fails, VidRush checks the retained file for missing or unreadable tracks and reports what it finds.
+
 ### Reopening VidRush without scanning again
 
 After a successful scan, close and reopen the popup on the same video page. VidRush reuses the quality list and the selected detected video. It performs a quick check of the page/player identity and the companion's saved selection, without asking yt-dlp to analyze the video again. Normal playback, unrelated captured video requests, and advertisement-frame navigation do not discard a verified result. Switching between qualities already declared by the same player also keeps the result.
@@ -139,7 +141,7 @@ Changing the page URL, replacing the video element, changing its source/declared
 
 The cache keeps up to **eight recent tabs** in memory during the current companion connection. It is not a permanent download-link history and is not saved to disk. Closing a tab, restarting Chrome/the companion, or reloading the extension clears its usable selections. If a selection is evicted, a browser-only file catalogue disappears, or the player identity cannot be verified, VidRush safely analyzes again. Hidden changes inside a private player API may still require Refresh.
 
-Existing users: run **`Update.cmd`**, finish active downloads, and reload VidRush at `chrome://extensions`. Confirm **v0.2.3** in the footer. The companion update provides saved-result reuse and track verification.
+Existing users can run **`Update.cmd`**, finish active downloads, and reload VidRush at `chrome://extensions`. Confirm **v0.2.4** in the footer. Updating the companion enables the new HLS track checks.
 
 ### Embedded players and signed-in lessons
 
@@ -261,6 +263,7 @@ If you customized `downloadDir` to point inside the companion installation folde
 | Browser-file download stops when leaving a page | Keep the original video page open until the download completes. Reopen, play, and refresh the video before retrying. |
 | Player scan finds no source, or a stream returns 403 | Reload the lesson, start playback, and retry. Signed URLs can expire; some streams also need cookies or DRM and remain unsupported. Never paste account credentials into VidRush. |
 | MP4 has sound only or picture only | Update VidRush and scan the page again. VidRush needs a source that provides both tracks. If it detects DRM, use the service's official playback options. |
+| Postprocessing failed or the source has no readable audio track | Start playback, refresh VidRush, and select another detected source if available. Some HLS renditions cannot supply both tracks. The downloaded file may remain in your save folder, but it is marked failed. |
 | Popup closes when choosing a folder | Finish or cancel the Windows dialog, then click VidRush again. The background connection retains your selection. |
 | Folder picker is already open | Finish or cancel the existing Windows folder dialog before starting another selection. |
 | Folder buttons are disabled, or the popup says the helper is old | Run `Update.cmd` from the latest project folder, finish active downloads, and activate the update or reload VidRush at `chrome://extensions`. Both installed code copies must be updated; merging alone is insufficient. |

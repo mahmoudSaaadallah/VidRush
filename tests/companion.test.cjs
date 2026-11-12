@@ -10,7 +10,7 @@ const { Companion } = require('../host/companion.cjs');
 const { buildMedia } = require('../host/media.cjs');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const videoTrack = { codec_type: 'video', codec_name: 'h264', width: 1280, height: 720 };
-const audioTrack = { codec_type: 'audio', codec_name: 'aac' };
+const audioTrack = { codec_type: 'audio', codec_name: 'aac', channels: 2, sample_rate: '44100' };
 function probeResult(call, streams) {
   assert.match(call.executable, /ffprobe(?:\.exe)?$/);
   call.child.stdout.write(JSON.stringify({ streams }));
