@@ -64,8 +64,8 @@
 
         <div id="video-placeholder" class="placeholder" hidden>
           <svg class="icon" aria-hidden="true"><use href="#i-film"/></svg><p id="placeholder-message">افتح صفحة فيديو لعرض الجودات المتاحة.</p>
-          <button id="scan-player" class="outline-button" type="button" hidden>فحص مشغّل الفيديو</button>
-          <p id="scan-hint" hidden>شغّل الفيديو أولًا. قد يطلب Chrome السماح بالوصول للمشغّل المضمّن؛ وافق ثم افتح الإضافة مجددًا لو أُغلقت.</p>
+          <button id="scan-player" class="outline-button" type="button" hidden>تفعيل الفحص التلقائي</button>
+          <p id="scan-hint" hidden>مرة واحدة: اسمح بالوصول إلى مواقع الويب ليعمل فحص المشغّلات تلقائيًا. تقدر تلغي الإذن من إعدادات الفحص الشامل. لو أُغلقت النافذة بعد السماح افتحها مجددًا.</p>
         </div>
 
         <section id="video" aria-label="خيارات الفيديو" hidden>
@@ -115,7 +115,7 @@
     <button id="start-discovery" class="primary" type="button" hidden>فحص التبويب الحالي</button>
     <button id="stop-discovery" class="outline-button" type="button" hidden>إيقاف فحص التبويب</button>
     <button id="disable-discovery" class="text-button" type="button" hidden>تعطيل الفحص الشامل وإزالة الصلاحية</button>
-    <p class="small-note">بعد التفعيل شغّل الفيديو أو غيّر الجودة، ثم اضغط تحديث في VidRush. مش كل طرق البث أو المحتوى المحمي مدعومين.</p>
+    <p class="small-note">السماح مرة واحدة. بعدها نفحص المشغّل تلقائيًا إذا تعذّر تحليل رابط الصفحة. شغّل الفيديو أولًا؛ ولو غيّرت الفيديو أو الجودة اضغط تحديث. مش كل طرق البث أو المحتوى المحمي مدعومين.</p>
   </dialog>
 
   <template id="job-template">

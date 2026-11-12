@@ -259,7 +259,20 @@ async function analyze(refresh = false, scanPlayer = false) {
   $('refresh').setAttribute('aria-busy', 'true');
   notice('جارٍ فحص الفيديو والجودات المتاحة…');
   try {
-    const result = await call('analyze', { tabId: activeTab.id, url: activeTab.url, refresh, scanPlayer });
+    const selection = { tabId: activeTab.id, url: activeTab.url };
+    let result;
+    try { result = await call('analyze', { ...selection, refresh, scanPlayer }); }
+    catch (error) {
+      // Chrome keeps optional grants across popup openings. Reuse them without
+      // request(), and give a newly loaded/authorized player one automatic retry.
+      const allowed = await chrome.permissions.contains({ origins: SCAN_ORIGINS }) ||
+        error.playerOrigins?.length && await chrome.permissions.contains({ origins: error.playerOrigins });
+      if (scanPlayer || !allowed || sequence !== analysisSequence) throw error;
+      notice('جارٍ فحص المشغّل تلقائيًا…');
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      if (sequence !== analysisSequence) return;
+      result = await call('analyze', { ...selection, refresh: true, scanPlayer: true });
+    }
     if (sequence !== analysisSequence) return;
     showMedia(result);
     notice('');
@@ -269,7 +282,7 @@ async function analyze(refresh = false, scanPlayer = false) {
       if (playerOrigins.length) text($('placeholder-message'), 'الفيديو موجود داخل مشغّل مضمّن في الصفحة.');
       $('scan-player').hidden = !playerOrigins.length;
       $('scan-hint').hidden = !playerOrigins.length;
-      notice(error.message, 'error'); showPlaceholder(true);
+      notice(playerOrigins.length ? 'فعّل الفحص التلقائي مرة واحدة للوصول إلى المشغّلات المضمّنة، ثم هنفحصها تلقائيًا.' : error.message, playerOrigins.length ? '' : 'error'); showPlaceholder(true);
     }
   } finally {
     if (sequence === analysisSequence) {
@@ -375,6 +388,7 @@ $('enable-discovery').addEventListener('click', async () => {
     const granted = await chrome.permissions.request({ origins: SCAN_ORIGINS });
     if (!granted) { text($('capture-status'), 'لم يتم منح الصلاحية. الفحص الشامل لم يتفعّل.'); return; }
     await startCapture();
+    await analyze(true, true);
   } catch (error) { text($('capture-status'), error.message); }
   finally { $('enable-discovery').disabled = false; }
 });
@@ -392,8 +406,9 @@ $('scan-player').addEventListener('click', async () => {
   $('scan-player').disabled = true;
   try {
     // Keep request() in this click handler so Chrome sees the user gesture.
-    const granted = await chrome.permissions.request({ origins: playerOrigins });
+    const granted = await chrome.permissions.request({ origins: SCAN_ORIGINS });
     if (!granted) { notice('لم يتم السماح بفحص المشغّل. تقدر تسمح له من نفس الزر وقت ما تحب.'); return; }
+    await startCapture();
     await analyze(true, true);
   } catch (error) { notice(error.message, 'error'); }
   finally { $('scan-player').disabled = false; }
