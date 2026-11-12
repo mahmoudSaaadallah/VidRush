@@ -113,8 +113,14 @@ async function main() {
     assert.equal(probe.streams.find(stream => stream.codec_type === 'video').height, 180);
     assert.ok(probe.streams.some(stream => stream.codec_type === 'audio'));
     assert.equal(ping.capabilities.browserTransfer, true);
-    const browser = await request('prepareBrowser', { metadata: { ext: 'mp4', bytes: payload.length, height: 360, title: 'Browser-streamed original test video' } });
-    const browserJob = await request('download', { token: browser.token, choice: browser.options[0].id });
+    assert.equal(ping.capabilities.browserQualities, true);
+    const browser = await request('prepareBrowser', { metadata: { title: 'Browser-streamed original test video', variants: [
+      { ext: 'webm', bytes: 16, height: 180, label: '180p' },
+      { ext: 'mp4', bytes: payload.length, height: 360, label: '360p' },
+    ] } });
+    assert.equal(browser.options.length, 2);
+    const browserJob = await request('download', { token: browser.token, choice: browser.options[1].id });
+    assert.match(browserJob.quality, /^360p/);
     for (let offset = 0; offset < payload.length; offset += 65536) {
       const chunk = payload.subarray(offset, offset + 65536);
       const ack = await request('browserChunk', { jobId: browserJob.id, offset, data: chunk.toString('base64') });
@@ -124,7 +130,7 @@ async function main() {
     const completedBrowser = events.find(event => event.job?.id === browserJob.id && event.job.status === 'completed');
     assert.ok(completedBrowser);
     assert.deepEqual(fs.readFileSync(path.join(config.downloadDir, completedBrowser.job.filename)), payload);
-    console.log('Framed browser transport saved an original MP4 byte-for-byte through the native companion.');
+    console.log('Framed browser transport saved the second quality with its own size and container, byte-for-byte through the native companion.');
     console.log('Real DASH download required the saved referrer for manifest and segments, selected 180p, and merged separate audio successfully.');
     await assert.rejects(request('inspect', { url: 'file:///C:/private' }), /HTTP|URL/);
     console.log(`Real yt-dlp ${ping.version}: native ping, analysis, quality selection, progress, downloaded bytes, and invalid URL handling passed.`);
