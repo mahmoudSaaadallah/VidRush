@@ -123,7 +123,7 @@ File names include the source video ID and format IDs, so different qualities of
 
 - Only qualities actually reported by the website are shown. VidRush does not upscale videos.
 - Up to three resolution buttons provide quick choices. **All qualities**, when shown, contains every available choice, including alternatives with the same resolution. The details below the buttons describe the selected choice's container, frame rate, and approximate size when available.
-- Regular yt-dlp choices include audio. The browser-file fallback saves the current MP4/WebM file as supplied by the website; it does not merge a separate audio track.
+- Regular yt-dlp choices include audio. The browser-file fallback saves the selected MP4/WebM file as supplied by the website; it does not merge a separate audio track.
 - **MP4** is offered when a suitable source combination is available. Other combinations may produce **MKV**. VidRush does not re-encode the video to force MP4.
 - An approximate size appears when the website provides enough information; otherwise no size is shown.
 - Separate video and audio tracks download in sequence. The percentage can restart for the second track, then the status changes to merging. Wait for **Completed**, rather than a track reaching 100%.
@@ -135,15 +135,15 @@ If a video plays in Chrome but VidRush reports **Unsupported URL**, the page may
 
 1. Sign in to the course website yourself and open a lesson you can watch.
 2. Start the video and let it play for a few seconds. Keep the lesson page open.
-3. Open VidRush. If **`فحص مشغّل الفيديو`** (Scan video player) appears, click it. Chrome may ask to allow access to the frame sites discovered on this page. This permission is optional; a new player domain does not require a code update.
-4. Allow the player access if you want to use this feature. If the popup closes during Chrome's permission prompt, reopen VidRush; it will retry with the granted access.
+3. Open VidRush. It automatically scans accessible player frames if normal page analysis fails. If the player still needs website access, **`تفعيل الفحص التلقائي`** (Enable automatic scanning) appears as a setup step.
+4. Click that button once and allow Chrome's optional access to HTTP/HTTPS websites. VidRush starts scanning immediately and reuses the grant on other websites and after reopening the popup. Previously granted access to individual player sites also continues to work automatically. If Chrome closes the popup during its permission prompt, reopen VidRush. [Chrome requires a user click for the initial permission request](https://developer.chrome.com/docs/extensions/reference/api/permissions#implement_optional_permissions); VidRush cannot silently approve it.
 5. Choose a quality and download. If **`الفيديو المكتشف`** (Detected video) appears, select the intended video source; a page can contain advertisements or several videos. The companion preserves the available referrer, user agent, and origin for the chosen source.
 
-<img src="docs/popup-player.png" width="300" alt="VidRush offering an optional Scan video player action for an embedded lesson">
+<img src="docs/popup-player.png" width="300" alt="VidRush offering one-time automatic scanning setup for an embedded lesson">
 
 This helps with non-DRM players that expose a readable file or stream. VidRush does not sign you in or export browser cookies/passwords. A `blob:` address alone is not a downloadable file; the underlying media must be discoverable.
 
-Existing users must run **`Update.cmd`** from the latest project copy, finish active downloads, then reload VidRush at `chrome://extensions` before using player scanning. Both the extension and companion need this update. Chrome manages the optional player permission, which can be revoked in the extension's site-access settings.
+Existing users must run **`Update.cmd`** from the latest project copy, finish active downloads, then reload VidRush at `chrome://extensions`. Check that the footer shows **v0.2.1**. Both the extension and companion need this update for browser quality selection. Saved website permissions remain managed by Chrome; revoke the broad grant using **Comprehensive scan → Disable comprehensive scan and remove permission**, or change site access in Chrome.
 
 ### Enable comprehensive scanning once
 
@@ -151,8 +151,8 @@ For broader automatic detection without allowing each frame site separately:
 
 1. Open VidRush on the video page. Click **`الفحص الشامل`** (Comprehensive scan) beside the theme controls.
 2. Click **`تفعيل الفحص الشامل`** (Enable comprehensive scan). Chrome asks for access to HTTP/HTTPS websites. Approve it only if you want this optional mode; basic downloads still work without it.
-3. If Chrome closes the popup, reopen VidRush and open **Comprehensive scan** again. When needed, click **`فحص التبويب الحالي`** (Scan current tab).
-4. Start/restart the video or change its quality, then click **`تحديث`** (Refresh) in VidRush. Requests made before scanning began may need to be repeated. If necessary, reload the video page after enabling the mode and start playback again.
+3. VidRush immediately scans the current player after permission is granted. If Chrome closes the popup, reopen VidRush; it automatically analyzes the page using the saved grant. You do not need to press a player-scan button on every site. If you previously stopped capture, **`فحص التبويب الحالي`** (Scan current tab) resumes it.
+4. Start the video before opening VidRush. If it started loading after the first attempt, VidRush gives an authorized player one automatic retry. Requests made before capture began may need to be repeated: restart the video, then use **`تحديث`** (Refresh) if needed. Use Refresh after changing the video or quality as well.
 5. Select the detected video and quality, check your save folder, and download.
 
 <img src="docs/popup-comprehensive.png" width="300" alt="Comprehensive scanning settings explaining optional website access and selected-tab capture">
@@ -165,7 +165,11 @@ The detector recognizes HLS, DASH, and supported video files by their URL or res
 
 Some players use a Service Worker to serve a virtual MP4/WebM address. The video plays in the page, but requesting that same address outside Chrome returns 403 or fails. When ordinary yt-dlp analysis fails, VidRush can probe a readable, non-DRM MP4/WebM in its original frame and transfer the file through Chrome to the local companion in small acknowledged chunks. The file goes into your selected save folder normally.
 
-For these downloads, **keep the video page and Chrome open until completion**. Closing the VidRush popup is fine. Closing/navigating the source page, reloading the extension, or revoking its frame access interrupts the transfer. Cancellation may leave a `.part` file. VidRush shows the current file's observed resolution when available; change quality in the website player and refresh to discover another source. It cannot invent additional qualities. Separate browser-only audio/video streams and browser-only HLS/DASH reconstruction are not handled by this fallback.
+For these downloads, **keep the video page and Chrome open until completion**. Closing the VidRush popup is fine. Closing/navigating the source page, reloading the extension, or revoking its frame access interrupts the transfer. Cancellation may leave a `.part` file.
+
+VidRush checks up to 16 declared files from the video element's `<source>` entries and, when available, the public JW Player playlist API. It reads a small file header to include only readable MP4/WebM files with a known size. It does not switch playback to cycle through qualities. Every option is bound to its own file and size, so selecting 720p downloads that file even if the website is currently playing another quality.
+
+Quality names come from the player's labels when available. For example, a movie labelled **360p** may contain a cropped image only **272 pixels high**; VidRush keeps the player's 360p label instead of inventing a separate 272p quality. If the player supplies only one file and has no quality menu, VidRush offers only that file. If other files are hidden until the website switches quality, change it in the player and refresh VidRush. This is not universal quality enumeration: private player APIs, separate browser-only audio/video streams, and browser-only HLS/DASH reconstruction remain unsupported by this fallback.
 
 ## Supported websites and limits
 
