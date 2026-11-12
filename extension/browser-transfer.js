@@ -3,16 +3,24 @@
 // Runs in the selected document's MAIN world: its own Service Worker and normal
 // browser session must handle the request. No cookies or credentials leave Chrome.
 async function browserFrameFile(action, options) {
-  const { key, url, total } = options;
+  try {
+  const { key, url, total, videoIndex } = options;
   const slot = '__vidrush_' + key;
-  const getVideo = () => [...document.querySelectorAll('video')].find(video => (video.currentSrc || video.src) === url);
+  const matches = value => value === url || value && typeof value === 'object' && JSON.stringify(value) === JSON.stringify(url);
+  const getVideo = () => {
+    const videos = [...document.querySelectorAll('video')];
+    return Number.isInteger(videoIndex) && videoIndex >= 0 ? videos[videoIndex] : videos.find(video => matches(video.currentSrc) || matches(video.src) || matches(video.getAttribute('src')));
+  };
+  // A player can expose a URL-like currentSrc object whose string conversion is
+  // meaningful only inside the page. Preserve it for fetch; never export it.
+  const fetchSource = () => getVideo()?.currentSrc || url;
   const rangeTotal = response => Number(response.headers.get('content-range')?.match(/\/(\d+)$/)?.[1] || response.headers.get('content-length'));
   if (action !== 'cancel' && getVideo()?.mediaKeys) throw new Error('DRM-protected videos are unsupported.');
   if (action === 'probe') {
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 15000);
     let reader;
     try {
-      const response = await fetch(url, { headers: { Range: 'bytes=0-1023' }, signal: controller.signal });
+      const response = await fetch(fetchSource(), { headers: { Range: 'bytes=0-1023' }, signal: controller.signal });
       if (![200, 206].includes(response.status) || !response.body) throw new Error('The browser could not read the video file.');
       reader = response.body.getReader();
       let head = new Uint8Array();
@@ -44,7 +52,7 @@ async function browserFrameFile(action, options) {
     while (produced < 262144 && state.offset < total) {
       if (!state.remainder.length) {
         if (!state.reader) {
-          const response = await fetch(url, { headers: { Range: 'bytes=' + state.offset + '-' }, signal: state.controller.signal });
+          const response = await fetch(fetchSource(), { headers: { Range: 'bytes=' + state.offset + '-' }, signal: state.controller.signal });
           const range = response.headers.get('content-range')?.match(/^bytes (\d+)-(\d+)\/(\d+)$/);
           if (![200, 206].includes(response.status) || !response.body || response.status === 200 && state.offset !== 0 || response.status === 206 && (!range || Number(range[1]) !== state.offset || Number(range[3]) !== total)) throw new Error('The browser returned an invalid video byte range.');
           state.responseEnd = range ? Number(range[2]) + 1 : total;
@@ -79,4 +87,5 @@ async function browserFrameFile(action, options) {
   } catch (error) {
     delete window[slot]; state.controller.abort(); void state.reader?.cancel().catch(() => {}); throw error;
   } finally { clearTimeout(timer); }
+  } catch (error) { return { error: String(error.message || error).slice(0, 1000) }; }
 }

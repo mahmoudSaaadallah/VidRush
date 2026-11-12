@@ -88,9 +88,10 @@ class CaptureSession {
       try { source.referer = new URL(initiator).origin + '/'; } catch { /* No trustworthy referrer. */ }
     }
     const key = details.url;
+    const previous = this.sources.get(key);
     this.sources.set(key, { ...source, url: key, kind });
     if (this.sources.size > 40) this.sources.delete(this.sources.keys().next().value);
-    this.changed(details.tabId, false);
+    if (!previous || previous.referer !== source.referer || previous.userAgent !== source.userAgent || previous.origin !== source.origin) this.changed(details.tabId, false);
   }
   done(details) { this.pending.delete(details.requestId); }
   read(tabId, url) {

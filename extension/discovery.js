@@ -9,7 +9,7 @@ function discoverPageMedia() {
   const hasDrm = videos.some(video => !!video.mediaKeys);
   const hasBlob = videos.some(video => (video.currentSrc || video.src || '').startsWith('blob:'));
   const embeds = [];
-  function add(value, mediaElement = false) {
+  function add(value, mediaElement = false, videoIndex) {
     if (typeof value !== 'string' || !value || value.length > 8192 || sources.size >= 20) return;
     let url;
     try { url = new URL(value, document.baseURI); } catch { return; }
@@ -17,12 +17,12 @@ function discoverPageMedia() {
     if (!mediaElement && !/\.(?:m3u8|mpd|mp4|webm|mov|m4v)(?:$|[?#])/i.test(url.href)) return;
     url.hash = '';
     const referer = url.origin === page.origin ? page.href.split('#')[0] : page.origin + '/';
-    sources.set(url.href, { url: url.href, referer });
+    sources.set(url.href, { ...sources.get(url.href), url: url.href, referer, ...(Number.isInteger(videoIndex) ? { videoIndex } : {}) });
   }
   if (!hasDrm) {
-    for (const video of videos) {
-      add(video.currentSrc, true); add(video.getAttribute('src'), true);
-      for (const source of video.querySelectorAll('source[src]')) add(source.src, true);
+    for (const [index, video] of videos.entries()) {
+      add(video.currentSrc, true, index); add(video.getAttribute('src'), true, index);
+      for (const source of video.querySelectorAll('source[src]')) add(source.src, true, index);
     }
     // MSE players expose blob: in <video>; their fetched HLS/DASH manifests remain
     // in this frame's Resource Timing buffer. No request bodies or cookies are read.

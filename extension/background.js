@@ -67,10 +67,11 @@ async function inspectSource(tabId, url, set, index) {
     if (source.kind === 'embed' || source.kind !== 'file' && mediaKind(source.url) !== 'file') throw error;
     if (!browserTransfer) throw new Error('هذا الفيديو يحتاج النقل عبر المتصفح. شغّل Update.cmd ثم أعد تحميل الإضافة.');
     const target = { tabId, ...(source.documentId ? { documentIds: [source.documentId] } : { frameIds: [source.frameId || 0] }) };
-    const [probe] = await chrome.scripting.executeScript({ target, world: 'MAIN', func: browserFrameFile, args: ['probe', { key: '', url: source.url }] });
-    if (!probe?.result) throw error;
+    const [probe] = await chrome.scripting.executeScript({ target, world: 'MAIN', func: browserFrameFile, args: ['probe', { key: '', url: source.url, videoIndex: source.videoIndex }] });
+    if (!probe?.result) throw new Error('The video frame stopped responding. Start playback again and refresh.');
+    if (probe.result.error) throw new Error(probe.result.error);
     media = await request('prepareBrowser', { metadata: probe.result });
-    browserSources.set(media.token, { target: { tabId, ...(probe.documentId ? { documentIds: [probe.documentId] } : { frameIds: [source.frameId || 0] }) }, url: source.url, pageUrl: url, total: probe.result.bytes });
+    browserSources.set(media.token, { target: { tabId, ...(probe.documentId ? { documentIds: [probe.documentId] } : { frameIds: [source.frameId || 0] }) }, url: source.url, videoIndex: source.videoIndex, pageUrl: url, total: probe.result.bytes });
     if (browserSources.size > 8) browserSources.delete(browserSources.keys().next().value);
   }
   if ((await chrome.tabs.get(tabId)).url !== url || sourceChoices.get(tabId) !== set) throw new Error('تغيّرت الصفحة أثناء الفحص. اضغط تحديث على الفيديو الجديد.');
@@ -84,8 +85,9 @@ async function feedBrowserJob(job, source) {
   try {
     while (!task.stopped) {
       if ((await chrome.tabs.get(task.target.tabId)).url !== task.pageUrl) throw new Error('The video page changed during the browser download.');
-      const [response] = await chrome.scripting.executeScript({ target: task.target, world: 'MAIN', func: browserFrameFile, args: ['read', { key: task.key, url: task.url, total: task.total }] });
+      const [response] = await chrome.scripting.executeScript({ target: task.target, world: 'MAIN', func: browserFrameFile, args: ['read', { key: task.key, url: task.url, total: task.total, videoIndex: task.videoIndex }] });
       if (!response?.result) throw new Error('The video frame closed.');
+      if (response.result.error) throw new Error(response.result.error);
       for (const data of response.result.chunks) {
         if (task.stopped) break;
         const acknowledgement = await request('browserChunk', { jobId: job.id, offset, data });
@@ -183,9 +185,10 @@ async function inspectTab(tabId, url, scanOnly = false) {
   const captured = capture.read(tabId, url).filter(source => !protectedFrames.has(source.frameId));
   if (captured.length && !sourceContext) throw new Error('الفحص الشامل يحتاج البرنامج المساعد الجديد. شغّل Update.cmd ثم أعد تحميل الإضافة بعد انتهاء التحميلات.');
   const snapshots = frames.flatMap(frame => frame.result?.hasDrm ? [] : (frame.result?.sources || []).map(source => ({ ...source, frameId: frame.frameId, documentId: frame.documentId, title: frame.result?.title || main.title })));
+  const snapshotByUrl = new Map(snapshots.map(source => [source.url, source]));
   const embeds = frames.flatMap(frame => frame.result?.hasDrm ? [] : (frame.result?.embeds || []).map(source => ({ ...source, title: main.title, kind: 'embed' })));
   const rank = source => source.kind === 'embed' ? 4 : (source.kind || mediaKind(source.url)) === 'hls' ? (/master/i.test(new URL(source.url).pathname) ? 0 : 1) : (source.kind || mediaKind(source.url)) === 'dash' ? 1 : 2;
-  const sources = [...captured.map(source => ({ ...source, documentId: source.documentId || frames.find(frame => frame.frameId === source.frameId)?.documentId, title: frames.find(frame => frame.frameId === source.frameId)?.result?.title || main.title })), ...snapshots, ...embeds]
+  const sources = [...captured.map(source => ({ ...snapshotByUrl.get(source.url), ...source, documentId: source.documentId || frames.find(frame => frame.frameId === source.frameId)?.documentId, title: frames.find(frame => frame.frameId === source.frameId)?.result?.title || main.title })), ...snapshots, ...embeds]
     .filter(source => !seen.has(source.url) && seen.add(source.url)).sort((a, b) => rank(a) - rank(b)).slice(0, 20);
   const set = { url, sources };
   sourceChoices.set(tabId, set);
