@@ -15,6 +15,7 @@ let sourceContext = false;
 let browserTransfer = false;
 let browserQualities = false;
 let analysisCache = false;
+let pairedStreams = false;
 let capturePaused = false;
 const pending = new Map();
 const analyses = new Map();
@@ -61,7 +62,7 @@ async function scanStatus(tabId) {
 
 function withSourceChoices(media, set, selected) {
   return { ...media, sourceIndex: selected, detectedSources: set.sources.map((source, index) => ({ index,
-    label: (source.kind === 'hls' ? 'HLS' : source.kind === 'dash' ? 'DASH' : source.kind === 'file' ? 'فيديو' : 'مشغّل') + ' · ' + new URL(source.url).hostname + ' · ' + (index + 1) })) };
+    label: (source.kind === 'paired' ? 'بث مدمج' : source.kind === 'hls' ? 'HLS' : source.kind === 'dash' ? 'DASH' : source.kind === 'file' ? 'فيديو' : 'مشغّل') + ' · ' + new URL(source.url).hostname + ' · ' + (index + 1) })) };
 }
 
 async function readIdentity(scope) {
@@ -108,7 +109,14 @@ async function inspectSource(tabId, url, set, index, entry) {
   }
   const context = sourceContext ? { userAgent: source.userAgent, origin: source.origin } : {};
   let media;
-  try { media = await request('inspect', { url: source.url, referer: source.referer, title: source.title, ...context }); }
+  try {
+    const payload = { url: source.url, referer: source.referer, title: source.title, ...context };
+    if (source.audioUrl) {
+      payload.audioUrl = source.audioUrl;
+      if (source.audioReferer) payload.audioReferer = source.audioReferer;
+    }
+    media = await request('inspect', payload);
+  }
   catch (error) {
     if (['DRM_PROTECTED', 'MISSING_MEDIA_TRACKS'].includes(error.code)) throw error;
     if (source.kind === 'embed' || source.kind !== 'file' && mediaKind(source.url) !== 'file') throw error;
@@ -177,7 +185,7 @@ function connect() {
     if (message.ok) request.resolve(message.data);
     else {
       const detail = message.code === 'DRM_PROTECTED' ? protectedVideoMessage : message.code === 'MISSING_MEDIA_TRACKS' ? missingTracksMessage : message.error;
-      request.reject(Object.assign(new Error(detail || 'The companion could not complete this request.'), { code: message.code }));
+      request.reject(Object.assign(new Error(detail || 'The companion could not complete this request.'), { code: message.code, hasVideo: message.hasVideo, hasAudio: message.hasAudio }));
     }
   });
   port.onDisconnect.addListener(() => {
@@ -254,17 +262,42 @@ async function inspectTab(tabId, url, scanOnly = false, entry) {
   sourceChoices.set(tabId, set);
   if (sourceChoices.size > 8) sourceChoices.delete(sourceChoices.keys().next().value);
   let sourceError;
-  for (let index = 0; index < Math.min(sources.length, 4); index++) {
+  const inspectedTracks = [];
+  for (let index = 0; index < Math.min(sources.length, 6); index++) {
     const latest = await chrome.tabs.get(tabId);
     if (latest.url !== url) throw new Error('تغيّرت الصفحة أثناء الفحص. اضغط تحديث على الفيديو الجديد.');
     let media;
     try { media = await inspectSource(tabId, url, set, index, entry); }
     catch (error) {
+      if (error.code === 'MISSING_MEDIA_TRACKS') {
+        inspectedTracks.push({ index, source: sources[index], hasVideo: Boolean(error.hasVideo), hasAudio: Boolean(error.hasAudio) });
+      }
       if (!sourceError || error.code === 'DRM_PROTECTED' || error.code === 'MISSING_MEDIA_TRACKS' && !sourceError.code) sourceError = error;
       continue;
     }
     if ((await chrome.tabs.get(tabId)).url !== url) throw new Error('تغيّرت الصفحة أثناء الفحص. اضغط تحديث على الفيديو الجديد.');
     return media;
+  }
+  if (pairedStreams) {
+    const videoCandidates = inspectedTracks.filter(item => item.hasVideo && !item.hasAudio);
+    const audioCandidate = inspectedTracks.find(item => item.hasAudio && !item.hasVideo);
+    if (videoCandidates.length && audioCandidate) {
+      const pairedSources = videoCandidates.map(v => ({
+        ...v.source,
+        audioUrl: audioCandidate.source.url,
+        audioReferer: audioCandidate.source.referer || v.source.referer,
+        kind: 'paired'
+      }));
+      set.sources.unshift(...pairedSources);
+      try {
+        const media = await inspectSource(tabId, url, set, 0, entry);
+        if ((await chrome.tabs.get(tabId)).url !== url) throw new Error('تغيّرت الصفحة أثناء الفحص. اضغط تحديث على الفيديو الجديد.');
+        return media;
+      } catch (error) {
+        if (error.code === 'DRM_PROTECTED') throw error;
+        if (!sourceError || error.code === 'MISSING_MEDIA_TRACKS' && !sourceError.code) sourceError = error;
+      }
+    }
   }
   if (protectedFrames.size || sourceError?.code === 'DRM_PROTECTED') throw new Error(protectedVideoMessage);
   const full = await scanStatus(tabId);
@@ -298,6 +331,7 @@ async function handle(message) {
     browserTransfer = companion.capabilities?.browserTransfer === true;
     browserQualities = companion.capabilities?.browserQualities === true;
     analysisCache = companion.capabilities?.analysisCache === true;
+    pairedStreams = companion.capabilities?.pairedStreams === true;
     if (epoch === destinationEpoch) await saveDestination({ downloadDir: companion.downloadDir, choosingFolder: !!companion.choosingFolder });
     const current = await request('status');
     for (const job of current) {

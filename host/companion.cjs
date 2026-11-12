@@ -1,11 +1,12 @@
 'use strict';
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { createInterface } = require('node:readline');
-const { validateUrl, buildMedia, publicMedia, baseArgs, downloadArgs, sourceArgs, safeError } = require('./media.cjs');
+const { validateUrl, buildMedia, publicMedia, baseArgs, downloadArgs, sourceArgs, safeError, mergePairedInfos } = require('./media.cjs');
 const { selectFolder, saveDownloadDirectory } = require('./folders.cjs');
 const { openFolder } = require('./open-folder.cjs');
 const { browserMedia, BrowserDownload } = require('./browser-download.cjs');
@@ -126,7 +127,7 @@ class Companion {
         this.versionPromise ||= this.run(['--version'], { timeout: 15000 }).then(version => version.trim()).catch(error => { this.versionPromise = null; throw error; });
         const version = await this.versionPromise;
         data = { version, ffmpeg: !!this.config.ffmpegPath, downloadDir: this.config.downloadDir, choosingFolder: this.choosingFolder,
-          protocolVersion: 7, capabilities: { folderPicker: true, openFolder: true, pageSources: true, sourceContext: true, browserTransfer: true, browserQualities: true, analysisCache: true } };
+          protocolVersion: 7, capabilities: { folderPicker: true, openFolder: true, pageSources: true, sourceContext: true, browserTransfer: true, browserQualities: true, analysisCache: true, pairedStreams: true } };
       } else if (action === 'cachedMedia') {
         const media = this.media.get(message.token);
         if (media) { this.media.delete(message.token); this.media.set(message.token, media); }
@@ -147,6 +148,7 @@ class Companion {
       } else if (action === 'inspect') {
         if (this.inspections >= 2) throw new Error('Video analysis is already running. Wait a moment and retry.');
         const url = validateUrl(message.url);
+        const audioUrl = message.audioUrl ? validateUrl(message.audioUrl) : null;
         const context = { userAgent: message.userAgent, origin: message.origin };
         const headers = sourceArgs(message.referer, context);
         this.inspections++;
@@ -157,9 +159,17 @@ class Companion {
           // Do not expand real playlists, unresolved entries, or multiple videos.
           if (info.entries?.length === 1 && info.entries[0]?.formats) info = info.entries[0];
           await this.resolveAmbiguousTracks(info, { ...context, referer: message.referer });
+          if (audioUrl) {
+            const audioHeaders = sourceArgs(message.audioReferer || message.referer, context);
+            const audioRaw = await this.run([...baseArgs(this.config), ...audioHeaders, '--skip-download', '--dump-single-json', '--', audioUrl]);
+            let audioInfo = JSON.parse(audioRaw);
+            if (audioInfo.entries?.length === 1 && audioInfo.entries[0]?.formats) audioInfo = audioInfo.entries[0];
+            await this.resolveAmbiguousTracks(audioInfo, { ...context, referer: message.audioReferer || message.referer });
+            info = mergePairedInfos(info, audioInfo, { referer: message.referer, audioReferer: message.audioReferer, title: message.title });
+          }
           const media = buildMedia(info, !!this.config.ffmpegPath);
           if (message.referer && typeof message.title === 'string' && message.title.trim()) media.title = message.title.trim().slice(0, 300);
-          this.media.set(media.token, { ...media, url, referer: message.referer, context });
+          this.media.set(media.token, { ...media, url, referer: message.referer, context, pairedInfo: audioUrl ? info : null });
           if (this.media.size > 8) this.media.delete(this.media.keys().next().value);
           data = publicMedia(media);
         } finally { this.inspections--; }
@@ -195,7 +205,7 @@ class Companion {
           this.jobs.delete(old.id);
         }
         if (media.browser) this.browserJobs.set(job.id, new BrowserDownload(job, choice, value => this.update(value)));
-        else this.startJob(job, media.url, choice, media.referer, media.context);
+        else this.startJob(job, media.url, choice, media.referer, media.context, media.pairedInfo);
         data = this.publicJob(job);
       } else if (action === 'cancel') {
         const job = this.jobs.get(message.jobId);
@@ -219,7 +229,7 @@ class Companion {
       this.emit({ id, ok: true, data });
     } catch (error) {
       const code = ['DRM_PROTECTED', 'MISSING_MEDIA_TRACKS'].includes(error.code) ? error.code : undefined;
-      this.emit({ id, ok: false, error: safeError(error.message || error).slice(-3000), code });
+      this.emit({ id, ok: false, error: safeError(error.message || error).slice(-3000), code, hasVideo: error.hasVideo, hasAudio: error.hasAudio });
     }
   }
 
@@ -230,9 +240,14 @@ class Companion {
 
   update(job) { this.emit({ event: 'job', job: this.publicJob(job) }); }
 
-  startJob(job, url, choice, referer, context) {
+  startJob(job, url, choice, referer, context, pairedInfo) {
     job.downloadDir ||= this.config.downloadDir;
     let input;
+    let infoJsonPath;
+    if (pairedInfo) {
+      infoJsonPath = path.join(os.tmpdir(), `vidrush-job-${job.id}.info.json`);
+      fs.writeFileSync(infoJsonPath, JSON.stringify(pairedInfo));
+    }
     const outputDirectory = path.resolve(job.downloadDir);
     const onLine = line => {
       if (!['downloading', 'processing'].includes(job.status)) return;
@@ -256,9 +271,16 @@ class Companion {
         } catch { /* Completion still works if the extractor omits the filename. */ }
       }
     };
-    const task = this.run(downloadArgs({ ...this.config, downloadDir: job.downloadDir }, url, choice, referer, context), { timeout: 0, onLine });
+    const task = this.run(downloadArgs({ ...this.config, downloadDir: job.downloadDir }, url, choice, referer, context, infoJsonPath), { timeout: 0, onLine });
     job.child = onLine.child;
+    const cleanupInfo = () => {
+      if (infoJsonPath) {
+        try { fs.unlinkSync(infoJsonPath); } catch {}
+        infoJsonPath = null;
+      }
+    };
     task.then(async () => {
+      cleanupInfo();
       if (job.status === 'cancelled') return;
       if (this.config.ffmpegPath) {
         if (!job.filename) throw new Error('VidRush could not verify the saved video file.');
@@ -271,6 +293,7 @@ class Companion {
       delete job.speed; delete job.eta;
       this.update(job);
     }).catch(async error => {
+      cleanupInfo();
       if (job.status === 'cancelled') return;
       const detail = await this.describeDownloadError(error, input);
       if (job.status === 'cancelled') return;

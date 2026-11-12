@@ -251,3 +251,50 @@ test('completed session folders still open after the companion loses its in-memo
   await h.companion.handle({ id: 'invalid', action: 'openFolder', jobId: 'previous-session', knownDownloadDir: 'relative/path' });
   assert.equal(h.events.at(-1).ok, false);
 });
+
+test('separate video and audio streams are paired, merged, and downloaded via info json', async t => {
+  const h = harness(); t.after(h.cleanup);
+  const videoUrl = 'https://cdn.test/video.m3u8';
+  const audioUrl = 'https://cdn.test/audio.m3u8';
+  const inspect = h.companion.handle({
+    id: 'inspect-pair', action: 'inspect', url: videoUrl, audioUrl,
+    referer: 'https://player.test/', audioReferer: 'https://player.test/audio',
+    userAgent: 'Test UA', title: 'Paired Video Title'
+  });
+  await tick();
+  assert.equal(h.calls[0].args.at(-1), videoUrl);
+  h.calls[0].child.stdout.write(JSON.stringify({ formats: [{ format_id: '1080', url: videoUrl, ext: 'mp4', height: 1080, fps: 30, vcodec: 'avc1', acodec: 'none' }] }));
+  h.calls[0].child.emit('close', 0);
+  await tick();
+  assert.equal(h.calls[1].args.at(-1), audioUrl);
+  assert.equal(h.calls[1].args[h.calls[1].args.indexOf('--referer') + 1], 'https://player.test/audio');
+  h.calls[1].child.stdout.write(JSON.stringify({ formats: [{ format_id: 'a1', url: audioUrl, ext: 'm4a', vcodec: 'none', acodec: 'aac', abr: 128 }] }));
+  h.calls[1].child.emit('close', 0);
+  await inspect;
+  const result = h.events.at(-1);
+  assert.equal(result.ok, true);
+  assert.equal(result.data.title, 'Paired Video Title');
+  assert.equal(result.data.options[0].height, 1080);
+  assert.equal(result.data.options[0].label, '1080p · MP4');
+  assert.equal(h.companion.media.get(result.data.token).options[0].needsMerge, true);
+
+  const mediaToken = result.data.token;
+  const choiceId = result.data.options[0].id;
+  await h.companion.handle({ id: 'dl-pair', action: 'download', token: mediaToken, choice: choiceId });
+  const dlCall = h.calls[2];
+  assert.equal(dlCall.args.includes('--load-info-json'), true);
+  const infoJsonPath = dlCall.args[dlCall.args.indexOf('--load-info-json') + 1];
+  assert.equal(fs.existsSync(infoJsonPath), true);
+  const storedJson = JSON.parse(fs.readFileSync(infoJsonPath, 'utf8'));
+  assert.equal(storedJson.title, 'Paired Video Title');
+  assert.equal(storedJson.formats.length, 2);
+  assert.equal(storedJson.formats[0].format_id, 'v-1080');
+  assert.equal(storedJson.formats[1].format_id, 'a-a1');
+
+  dlCall.child.stdout.write(`VIDRUSH_FILE:${JSON.stringify(path.join(h.directory, 'paired.mp4'))}\n`);
+  dlCall.child.exitCode = 0; dlCall.child.emit('close', 0);
+  await tick(); probeResult(h.calls[3], [videoTrack, audioTrack]);
+  await tick();
+  assert.equal(h.events.at(-1).job.status, 'completed');
+  assert.equal(fs.existsSync(infoJsonPath), false);
+});

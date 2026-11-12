@@ -53,7 +53,9 @@ function buildMedia(info, hasFfmpeg) {
   const options = [...choices.values()].sort((a, b) => b.height - a.height || b.fps - a.fps || a.container.localeCompare(b.container));
   if (!options.length) {
     if (info.formats?.some(format => format.has_drm === true)) throw protectedMedia();
-    if (formats.length && formats.every(format => format.vcodec === 'none' || format.acodec === 'none') && (!videos.length || !audio.length)) throw missingTracks();
+    if (formats.length && formats.every(format => format.vcodec === 'none' || format.acodec === 'none') && (!videos.length || !audio.length)) {
+      throw missingTracks({ hasVideo: Boolean(videos.length), hasAudio: Boolean(audio.length) });
+    }
     throw new Error('No downloadable video with audio was found. The page may be unsupported or require login.');
   }
   return {
@@ -98,7 +100,43 @@ function safeError(value) {
   });
 }
 
-function downloadArgs(config, url, choice, referer, context) {
+function mergePairedInfos(videoInfo, audioInfo, options = {}) {
+  const referer = options.referer;
+  const audioReferer = options.audioReferer || referer;
+  const title = (typeof options.title === 'string' && options.title.trim()) || videoInfo.title || audioInfo.title || 'Video';
+
+  if (videoInfo.has_drm === true || audioInfo.has_drm === true) throw protectedMedia();
+
+  const rawVideoFormats = Array.isArray(videoInfo.formats) && videoInfo.formats.length ? videoInfo.formats : (videoInfo.url ? [videoInfo] : []);
+  const rawAudioFormats = Array.isArray(audioInfo.formats) && audioInfo.formats.length ? audioInfo.formats : (audioInfo.url ? [audioInfo] : []);
+
+  const isVideoFormat = f => f.vcodec !== 'none' && f.resolution !== 'audio only' && f.ext !== 'mhtml' && f.url;
+  const isAudioFormat = f => (f.vcodec === 'none' || !f.vcodec) && f.url && (f.acodec ? f.acodec !== 'none' : (f.resolution === 'audio only' || (f.audio_ext && f.audio_ext !== 'none') || /audio/i.test(f.format_note || '') || /audio/i.test(f.format_id || '')));
+
+  const videoFormats = rawVideoFormats.filter(isVideoFormat).map((f, i) => {
+    const format_id = `v-${f.format_id || i}`;
+    const http_headers = { ...(f.http_headers || {}) };
+    if (referer) http_headers.Referer = referer;
+    return { ...f, format_id, acodec: 'none', http_headers };
+  });
+
+  const audioFormats = rawAudioFormats.filter(isAudioFormat).map((f, i) => {
+    const format_id = `a-${f.format_id || i}`;
+    const http_headers = { ...(f.http_headers || {}) };
+    if (audioReferer) http_headers.Referer = audioReferer;
+    return { ...f, format_id, vcodec: 'none', acodec: f.acodec && f.acodec !== 'none' ? f.acodec : 'unknown', http_headers };
+  });
+
+  return {
+    ...videoInfo,
+    id: videoInfo.id || 'paired',
+    title: title.slice(0, 300),
+    _type: 'video',
+    formats: [...videoFormats, ...audioFormats]
+  };
+}
+
+function downloadArgs(config, url, choice, referer, context, infoJsonPath) {
   const args = [...baseArgs(config), '--newline', '--progress', '--progress-delta', '0.5',
     '--progress-template', 'download:VIDRUSH_PROGRESS:%(progress)j',
     '--print', 'before_dl:VIDRUSH_INPUT:%(filename)j',
@@ -108,8 +146,9 @@ function downloadArgs(config, url, choice, referer, context) {
     '--format', choice.selector];
   if (config.ffmpegPath) args.push('--ffmpeg-location', config.ffmpegPath);
   if (choice.needsMerge) args.push('--merge-output-format', choice.container);
-  args.push(...sourceArgs(referer, context), '--', validateUrl(url));
+  if (infoJsonPath) args.push(...sourceArgs(referer, context), '--load-info-json', infoJsonPath);
+  else args.push(...sourceArgs(referer, context), '--', validateUrl(url));
   return args;
 }
 
-module.exports = { validateUrl, buildMedia, publicMedia, baseArgs, downloadArgs, refererArgs, sourceArgs, safeError };
+module.exports = { validateUrl, buildMedia, publicMedia, baseArgs, downloadArgs, refererArgs, sourceArgs, safeError, mergePairedInfos };

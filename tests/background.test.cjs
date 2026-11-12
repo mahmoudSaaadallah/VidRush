@@ -34,9 +34,9 @@ function harness(initialJobs = [], options = {}) {
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-async function bootstrap(h, pageSources = true) {
+async function bootstrap(h, pageSources = true, pairedStreams = true) {
   const operation = h.api.handle({ action: 'bootstrap' });
-  await tick(); h.respond(h.sent.at(-1), { capabilities: { pageSources, sourceContext: true, analysisCache: true } });
+  await tick(); h.respond(h.sent.at(-1), { capabilities: { pageSources, sourceContext: true, analysisCache: true, pairedStreams } });
   await tick(); h.respond(h.sent.at(-1), []);
   await operation;
 }
@@ -329,6 +329,28 @@ test('a declared playlist or master manifest is prioritized over single-track re
   assert.equal(h.sent.at(-1).url, playlist);
   h.respond(h.sent.at(-1), { token: 'playlist-complete' });
   assert.equal((await operation).token, 'playlist-complete');
+});
+
+test('demuxed video-only and audio-only streams are paired into a combined candidate', async () => {
+  const videoStream = 'https://stream.test/video-rendition.m3u8';
+  const audioStream = 'https://stream.test/audio-rendition.m3u8';
+  const h = harness([], { page: { sources: [{ url: videoStream }, { url: audioStream }] } });
+  await bootstrap(h);
+  const operation = h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video', scanPlayer: true });
+  await tick();
+  assert.equal(h.sent.at(-1).url, videoStream);
+  h.callbacks.message({ id: h.sent.at(-1).id, ok: false, code: 'MISSING_MEDIA_TRACKS', hasVideo: true, hasAudio: false });
+  await tick();
+  assert.equal(h.sent.at(-1).url, audioStream);
+  h.callbacks.message({ id: h.sent.at(-1).id, ok: false, code: 'MISSING_MEDIA_TRACKS', hasVideo: false, hasAudio: true });
+  await tick();
+  const pairedRequest = h.sent.at(-1);
+  assert.equal(pairedRequest.url, videoStream);
+  assert.equal(pairedRequest.audioUrl, audioStream);
+  h.respond(pairedRequest, { token: 'paired-token', options: [{ id: 'opt-1' }] });
+  const result = await operation;
+  assert.equal(result.token, 'paired-token');
+  assert.match(result.detectedSources[0].label, /^بث مدمج/);
 });
 
 test('discoverPageMedia reconstructs Brightcove embed player URLs from DOM elements', () => {
