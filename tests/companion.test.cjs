@@ -88,6 +88,43 @@ test('download responds with serializable job and emits progress and completion'
   assert.equal(h.events.at(-1).job.percent, 100);
 });
 
+test('cached media availability never starts yt-dlp or discloses source details', async t => {
+  const h = harness(); t.after(h.cleanup);
+  h.companion.media.set('cached', { url: 'https://private.test/video?secret=token', referer: 'https://private.test/', context: { userAgent: 'Private UA' } });
+  await h.companion.handle({ id: '1', action: 'cachedMedia', token: 'cached' });
+  assert.deepEqual(h.events.at(-1).data, { available: true });
+  h.companion.media.clear();
+  await h.companion.handle({ id: '2', action: 'cachedMedia', token: 'cached' });
+  assert.deepEqual(h.events.at(-1).data, { available: false });
+  assert.equal(h.calls.length, 0); assert.equal(JSON.stringify(h.events).includes('secret'), false);
+});
+
+test('reopening popups reuses the yt-dlp version while ping still returns current settings', async t => {
+  const h = harness(); t.after(h.cleanup);
+  const first = h.companion.handle({ id: '1', action: 'ping' });
+  const second = h.companion.handle({ id: '2', action: 'ping' });
+  assert.equal(h.calls.length, 1);
+  h.calls[0].child.stdout.write('test-version\n'); h.calls[0].child.emit('close', 0);
+  await Promise.all([first, second]);
+  h.companion.choosingFolder = true;
+  await h.companion.handle({ id: '3', action: 'ping' });
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.events.at(-1).data.version, 'test-version');
+  assert.equal(h.events.at(-1).data.choosingFolder, true);
+  assert.equal(h.events.at(-1).data.capabilities.analysisCache, true);
+});
+
+test('a failed version lookup is retried on the next connection attempt', async t => {
+  const h = harness(); t.after(h.cleanup);
+  const first = h.companion.handle({ id: '1', action: 'ping' });
+  h.calls[0].child.emit('close', 1); await first;
+  assert.equal(h.events.at(-1).ok, false);
+  const second = h.companion.handle({ id: '2', action: 'ping' });
+  assert.equal(h.calls.length, 2);
+  h.calls[1].child.stdout.write('recovered\n'); h.calls[1].child.emit('close', 0); await second;
+  assert.equal(h.events.at(-1).data.version, 'recovered');
+});
+
 test('invalid requests and expired selections produce errors without starting processes', async t => {
   const h = harness(); t.after(h.cleanup);
   await h.companion.handle({ id: '1', action: 'download', token: 'expired', choice: 'injected' });
