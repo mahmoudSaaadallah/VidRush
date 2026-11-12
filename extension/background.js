@@ -22,11 +22,30 @@ const analyses = new Map();
 const sourceChoices = new Map();
 const browserSources = new Map();
 const browserJobs = new Map();
+function updateBadge(tabId, count = 0) {
+  if (!Number.isInteger(tabId) || tabId <= 0 || !chrome.action?.setBadgeText) return;
+  try {
+    if (count > 0) {
+      const text = count > 9 ? '9+' : String(count);
+      chrome.action.setBadgeText({ tabId, text });
+      chrome.action.setBadgeBackgroundColor?.({ tabId, color: '#2563eb' });
+      chrome.action.setBadgeTextColor?.({ tabId, color: '#ffffff' });
+    } else {
+      chrome.action.setBadgeText({ tabId, text: '' });
+    }
+  } catch {}
+}
+
 const capture = new CaptureSession({
   save: value => { void chrome.storage.session.set({ captureSession: value }).catch(() => {}); },
   // Capture traffic is not player identity: advertisements and later byte ranges
   // must not discard successful results (or detach an in-flight inspection).
-  changed: (tabId, reset) => { if (reset && !analyses.has(tabId)) sourceChoices.delete(tabId); },
+  changed: (tabId, reset) => {
+    if (reset && !analyses.has(tabId)) sourceChoices.delete(tabId);
+    if (reset) updateBadge(tabId, 0);
+  },
+  onBadge: (tabId, count) => updateBadge(tabId, count),
+  autoSniff: true,
 });
 let jobs = [];
 let destination = { downloadDir: '', choosingFolder: false };
@@ -36,6 +55,7 @@ const ready = chrome.storage.session.get(['jobs', 'destination', 'captureSession
   jobs = (result.jobs || []).map(job => ['downloading', 'processing'].includes(job.status)
     ? { ...job, status: 'failed', error: 'The browser or companion restarted. Analyze the video and retry.' } : job);
   capturePaused = result.capturePaused === true;
+  capture.paused = capturePaused;
   if (await chrome.permissions.contains({ origins: SCAN_ORIGINS }) && result.captureSession) {
     try { const tab = await chrome.tabs.get(result.captureSession.tabId); capture.restore({ ...result.captureSession, url: tab.url, epoch: 0 }); } catch { capture.stop(); }
   }
@@ -52,6 +72,8 @@ chrome.tabs.onUpdated.addListener((tabId, change) => {
   if (!change.url) return;
   if (analyses.get(tabId)?.url !== change.url) { analyses.delete(tabId); sourceChoices.delete(tabId); }
   if (capture.session?.url !== change.url) capture.navigate(tabId, change.url);
+  capture.clearTab(tabId);
+  updateBadge(tabId, 0);
 });
 
 async function scanStatus(tabId) {
@@ -233,6 +255,7 @@ async function inspectTab(tabId, url, scanOnly = false, entry) {
     }
     if (media) {
       if ((await chrome.tabs.get(tabId)).url !== url) throw new Error('تغيّرت الصفحة أثناء الفحص. اضغط تحديث على الفيديو الجديد.');
+      updateBadge(tabId, 1);
       return media;
     }
   }
@@ -276,6 +299,7 @@ async function inspectTab(tabId, url, scanOnly = false, entry) {
       continue;
     }
     if ((await chrome.tabs.get(tabId)).url !== url) throw new Error('تغيّرت الصفحة أثناء الفحص. اضغط تحديث على الفيديو الجديد.');
+    updateBadge(tabId, Math.max(1, set.sources.length));
     return media;
   }
   if (pairedStreams) {
@@ -292,6 +316,7 @@ async function inspectTab(tabId, url, scanOnly = false, entry) {
       try {
         const media = await inspectSource(tabId, url, set, 0, entry);
         if ((await chrome.tabs.get(tabId)).url !== url) throw new Error('تغيّرت الصفحة أثناء الفحص. اضغط تحديث على الفيديو الجديد.');
+        updateBadge(tabId, Math.max(1, set.sources.length));
         return media;
       } catch (error) {
         if (error.code === 'DRM_PROTECTED') throw error;
@@ -328,6 +353,7 @@ async function inspectTab(tabId, url, scanOnly = false, entry) {
             });
             if (browserSources.size > 8) browserSources.delete(browserSources.keys().next().value);
             if ((await chrome.tabs.get(tabId)).url !== url) throw new Error('تغيّرت الصفحة أثناء الفحص. اضغط تحديث على الفيديو الجديد.');
+            updateBadge(tabId, 1);
             return media;
           }
         }
@@ -362,13 +388,13 @@ async function inspectTab(tabId, url, scanOnly = false, entry) {
 async function handle(message) {
   await ready;
   if (['captureStatus', 'startCapture', 'stopCapture'].includes(message.action)) {
-    if (message.action === 'stopCapture') { capturePaused = true; await chrome.storage.session.set({ capturePaused }); capture.stop(); return scanStatus(message.tabId); }
+    if (message.action === 'stopCapture') { capturePaused = true; capture.paused = true; capture.clearTab(message.tabId); await chrome.storage.session.set({ capturePaused }); capture.stop(); return scanStatus(message.tabId); }
     if (message.action === 'startCapture') {
       if (!Number.isInteger(message.tabId) || !(await scanStatus(message.tabId)).enabled) throw new Error('فعّل الفحص الشامل واسمح بالصلاحية أولًا.');
       const tab = await chrome.tabs.get(message.tabId);
       if (tab.url !== message.url || !/^https?:\/\//i.test(tab.url)) throw new Error('افتح صفحة الفيديو وأعد المحاولة.');
       capture.select(message.tabId, tab.url);
-      capturePaused = false; await chrome.storage.session.set({ capturePaused });
+      capturePaused = false; capture.paused = false; await chrome.storage.session.set({ capturePaused });
     }
     return scanStatus(message.tabId);
   }
@@ -468,4 +494,4 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   return true;
 });
 
-chrome.tabs.onRemoved.addListener(tabId => { analyses.delete(tabId); sourceChoices.delete(tabId); if (capture.active(tabId)) capture.stop(); });
+chrome.tabs.onRemoved.addListener(tabId => { analyses.delete(tabId); sourceChoices.delete(tabId); capture.clearTab(tabId); if (capture.active(tabId)) capture.stop(); });

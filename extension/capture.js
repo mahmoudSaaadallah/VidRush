@@ -17,9 +17,11 @@ function mediaKind(value, contentType = '') {
 }
 
 class CaptureSession {
-  constructor({ now = Date.now, save = () => {}, changed = () => {} } = {}) {
-    this.now = now; this.save = save; this.changed = changed;
+  constructor({ now = Date.now, save = () => {}, changed = () => {}, onBadge = () => {}, autoSniff = false } = {}) {
+    this.now = now; this.save = save; this.changed = changed; this.onBadge = onBadge; this.autoSniff = autoSniff;
     this.session = null; this.pending = new Map(); this.sources = new Map(); this.frames = new Map();
+    this.tabSources = new Map();
+    this.paused = false;
   }
   restore(value) {
     if (Number.isInteger(value?.tabId) && value.expiresAt > this.now()) this.session = value;
@@ -33,13 +35,20 @@ class CaptureSession {
     if (this.active(tabId) && this.session.url === url) return;
     this.stop();
     this.session = { tabId, url, epoch: 0, expiresAt: this.now() + 10 * 60 * 1000 };
+    const pre = this.tabSources.get(tabId);
+    if (pre) {
+      for (const [key, source] of pre) this.sources.set(key, source);
+    }
     this.persist();
   }
   stop() {
     const tabId = this.session?.tabId;
     this.session = null; this.pending.clear(); this.sources.clear(); this.frames.clear();
     this.save(null);
-    if (tabId !== undefined) this.changed(tabId, true);
+    if (tabId !== undefined) {
+      this.changed(tabId, true);
+      this.onBadge(tabId, 0);
+    }
   }
   navigate(tabId, url) {
     if (!this.active(tabId)) return;
@@ -47,13 +56,23 @@ class CaptureSession {
     this.pending.clear(); this.sources.clear(); this.frames.clear();
     this.persist(); this.changed(tabId, true);
   }
+  clearTab(tabId) {
+    this.tabSources.delete(tabId);
+    this.onBadge(tabId, 0);
+  }
   before(details) {
-    if (!this.active(details.tabId)) return;
-    if (details.type === 'main_frame') { this.navigate(details.tabId, details.url); return; }
+    if (this.paused || !this.autoSniff && !this.active(details.tabId)) return;
+    if (details.type === 'main_frame') {
+      if (this.active(details.tabId)) this.navigate(details.tabId, details.url);
+      this.clearTab(details.tabId);
+      return;
+    }
     if (details.type === 'sub_frame') {
-      this.frames.set(details.frameId, (this.frames.get(details.frameId) || 0) + 1);
-      for (const [key, source] of this.sources) if (source.frameId === details.frameId) this.sources.delete(key);
-      this.changed(details.tabId, true);
+      if (this.active(details.tabId)) {
+        this.frames.set(details.frameId, (this.frames.get(details.frameId) || 0) + 1);
+        for (const [key, source] of this.sources) if (source.frameId === details.frameId) this.sources.delete(key);
+        this.changed(details.tabId, true);
+      }
       return;
     }
     if (details.method !== 'GET') return;
@@ -61,11 +80,11 @@ class CaptureSession {
     try { source = new URL(details.url); } catch { return; }
     if (!['http:', 'https:'].includes(source.protocol) || source.username || source.password || details.url.length > 8192) return;
     this.pending.set(details.requestId, { url: details.url, frameId: details.frameId, documentId: details.documentId,
-      epoch: this.session.epoch, frameEpoch: this.frames.get(details.frameId) || 0, initiator: details.initiator });
+      tabId: details.tabId, epoch: this.session?.epoch || 0, frameEpoch: this.frames.get(details.frameId) || 0, initiator: details.initiator });
     if (this.pending.size > 128) this.pending.delete(this.pending.keys().next().value);
   }
   headers(details) {
-    if (!this.active(details.tabId)) return;
+    if (this.paused || !this.autoSniff && !this.active(details.tabId)) return;
     const entry = this.pending.get(details.requestId);
     if (!entry) return;
     entry.headersObserved = true;
@@ -78,9 +97,11 @@ class CaptureSession {
     }
   }
   response(details) {
-    if (!this.active(details.tabId) || ![200, 206].includes(details.statusCode)) return;
+    if (this.paused || ![200, 206].includes(details.statusCode)) return;
+    if (!this.autoSniff && !this.active(details.tabId)) return;
     const entry = this.pending.get(details.requestId);
-    if (!entry || entry.epoch !== this.session.epoch || entry.frameEpoch !== (this.frames.get(entry.frameId) || 0)) return;
+    if (!entry) return;
+    if (this.active(details.tabId) && (entry.epoch !== this.session.epoch || entry.frameEpoch !== (this.frames.get(entry.frameId) || 0))) return;
     const type = (details.responseHeaders || []).find(header => header.name.toLowerCase() === 'content-type')?.value || '';
     const kind = mediaKind(details.url, type);
     if (!kind) return;
@@ -89,15 +110,35 @@ class CaptureSession {
       try { source.referer = new URL(initiator).origin + '/'; } catch { /* No trustworthy referrer. */ }
     }
     const key = details.url;
-    const previous = this.sources.get(key);
-    this.sources.set(key, { ...source, url: key, kind });
-    if (this.sources.size > 40) this.sources.delete(this.sources.keys().next().value);
-    if (!previous || previous.referer !== source.referer || previous.userAgent !== source.userAgent || previous.origin !== source.origin) this.changed(details.tabId, false);
+
+    if (this.autoSniff && Number.isInteger(details.tabId)) {
+      let tabMap = this.tabSources.get(details.tabId);
+      if (!tabMap) {
+        tabMap = new Map();
+        this.tabSources.set(details.tabId, tabMap);
+        if (this.tabSources.size > 32) this.tabSources.delete(this.tabSources.keys().next().value);
+      }
+      tabMap.set(key, { ...source, url: key, kind });
+      if (tabMap.size > 20) tabMap.delete(tabMap.keys().next().value);
+      this.onBadge(details.tabId, tabMap.size);
+    }
+
+    if (this.active(details.tabId)) {
+      const previous = this.sources.get(key);
+      this.sources.set(key, { ...source, url: key, kind });
+      if (this.sources.size > 40) this.sources.delete(this.sources.keys().next().value);
+      if (!previous || previous.referer !== source.referer || previous.userAgent !== source.userAgent || previous.origin !== source.origin) this.changed(details.tabId, false);
+    }
   }
   done(details) { this.pending.delete(details.requestId); }
   read(tabId, url) {
-    if (!this.active(tabId) || this.session.url !== url) return [];
-    return [...this.sources.values()];
+    if (this.active(tabId) && this.session.url === url && this.sources.size) {
+      return [...this.sources.values()];
+    }
+    if (this.autoSniff && !this.paused && this.tabSources.has(tabId)) {
+      return [...this.tabSources.get(tabId).values()];
+    }
+    return [];
   }
 }
 

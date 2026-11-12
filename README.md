@@ -141,7 +141,7 @@ Changing the page URL, replacing the video element, changing its source/declared
 
 The cache keeps up to **eight recent tabs** in memory during the current companion connection. It is not a permanent download-link history and is not saved to disk. Closing a tab, restarting Chrome/the companion, or reloading the extension clears its usable selections. If a selection is evicted, a browser-only file catalogue disappears, or the player identity cannot be verified, VidRush safely analyzes again. Hidden changes inside a private player API may still require Refresh.
 
-Existing users can run **`Update.cmd`**, finish active downloads, and reload VidRush at `chrome://extensions`. Confirm **v0.3.0** in the footer. Updating enables progressive MediaSource Extensions (MSE) buffer fallback capture for complex streaming players, allowing in-memory video recovery when standard network streams are unavailable.
+Existing users can run **`Update.cmd`**, finish active downloads, and reload VidRush at `chrome://extensions`. Confirm **v0.3.1** in the footer. Updating enables automatic background tab media sniffing with toolbar action badge indicators (blue dot / media count) for instant video detection without waiting to click the popup.
 
 ### Embedded players and signed-in lessons
 

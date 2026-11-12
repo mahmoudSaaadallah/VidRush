@@ -63,3 +63,31 @@ test('expiration and stop purge pending context and signed media, and captures a
   assert.equal(h.capture.sources.size, 0); assert.equal(h.capture.pending.size, 0);
   assert.equal(h.saved.at(-1), null);
 });
+
+test('auto-sniff detects media across background tabs and emits badge counts', () => {
+  const badges = {};
+  const capture = new CaptureSession({
+    autoSniff: true,
+    onBadge: (tabId, count) => { badges[tabId] = count; }
+  });
+
+  const req1 = { requestId: 'req-1', tabId: 5, frameId: 0, method: 'GET', url: 'https://cdn.test/hls/master.m3u8' };
+  capture.before(req1);
+  capture.headers({ ...req1, requestHeaders: [{ name: 'Referer', value: 'https://site.test/' }] });
+  capture.response({ ...req1, statusCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'application/vnd.apple.mpegurl' }] });
+
+  assert.equal(badges[5], 1);
+  const sources = capture.read(5, 'https://site.test/lesson');
+  assert.equal(sources.length, 1);
+  assert.equal(sources[0].url, 'https://cdn.test/hls/master.m3u8');
+  assert.equal(sources[0].kind, 'hls');
+
+  const req2 = { requestId: 'req-2', tabId: 5, frameId: 0, method: 'GET', url: 'https://cdn.test/video.mp4' };
+  capture.before(req2);
+  capture.response({ ...req2, statusCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'video/mp4' }] });
+  assert.equal(badges[5], 2);
+
+  capture.clearTab(5);
+  assert.equal(badges[5], 0);
+  assert.equal(capture.read(5, 'https://site.test/lesson').length, 0);
+});

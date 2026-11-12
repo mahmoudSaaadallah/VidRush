@@ -13,7 +13,13 @@ function harness(initialJobs = [], options = {}) {
     onDisconnect: { addListener(fn) { callbacks.disconnect = fn; } },
     postMessage(message) { sent.push(message); },
   };
+  const badges = {}, badgeColors = {};
   const chrome = {
+    action: {
+      setBadgeText: ({ tabId, text }) => { badges[tabId] = text; },
+      setBadgeBackgroundColor: ({ tabId, color }) => { badgeColors[tabId] = color; },
+      setBadgeTextColor: () => {},
+    },
     runtime: {
       id: 'test-extension', getURL: suffix => `chrome-extension://test-extension/${suffix}`,
       connectNative: () => port, onMessage: { addListener(fn) { callbacks.external = fn; } },
@@ -36,7 +42,7 @@ function harness(initialJobs = [], options = {}) {
     importScripts: filename => vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'extension', filename), 'utf8'), context) });
   vm.runInContext(`${fs.readFileSync(path.join(__dirname, '..', 'extension', 'background.js'), 'utf8')}\nglobalThis.api = { handle };`, context);
   const respond = (message, data) => callbacks.message({ id: message.id, ok: true, data });
-  return { api: context.api, sent, stored, callbacks, respond, chrome, identity };
+  return { api: context.api, sent, stored, callbacks, respond, chrome, identity, badges, badgeColors };
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
@@ -668,4 +674,30 @@ test('browserFrameFile hooks MSE SourceBuffer, probes recorded chunks, and strea
   assert.equal(readRes.done, true);
   const reconstructed = Buffer.from(readRes.chunks[0], 'base64');
   assert.deepEqual(reconstructed, mediaChunk);
+});
+
+test('automatic background media sniffer updates badge and pre-arms analysis', async () => {
+  const h = harness([], { full: true });
+  await bootstrap(h);
+
+  const network = { requestId: 'net-bg-1', tabId: 3, frameId: 0, method: 'GET', url: 'https://cdn.example.test/stream/master.m3u8' };
+  h.callbacks.onBeforeRequest(network);
+  h.callbacks.onBeforeSendHeaders({ ...network, requestHeaders: [{ name: 'Referer', value: 'https://example.com/video' }, { name: 'User-Agent', value: 'Test UA' }] });
+  h.callbacks.onResponseStarted({ ...network, statusCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'application/vnd.apple.mpegurl' }] });
+  await tick();
+
+  assert.equal(h.badges[3], '1');
+  assert.equal(h.badgeColors[3], '#2563eb');
+
+  const operation = h.api.handle({ action: 'analyze', tabId: 3, url: 'https://example.com/video' });
+  await tick();
+  h.callbacks.message({ id: h.sent.at(-1).id, ok: false, error: 'Unsupported URL' });
+  await tick();
+  assert.equal(h.sent.at(-1).url, network.url);
+  h.respond(h.sent.at(-1), { token: 'auto-sniffed-token', options: [] });
+  const media = await operation;
+  assert.equal(media.token, 'auto-sniffed-token');
+
+  h.callbacks.tabUpdated(3, { url: 'https://other-site.test/' });
+  assert.equal(h.badges[3], '');
 });
