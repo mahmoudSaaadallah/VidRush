@@ -1,11 +1,11 @@
 'use strict';
 
-function trackError(code, message) {
-  return Object.assign(new Error(message), { code });
+function trackError(code, message, extra = {}) {
+  return Object.assign(new Error(message), { code, ...extra });
 }
 
-function missingTracks() {
-  return trackError('MISSING_MEDIA_TRACKS', 'This source does not contain both a video track and an audio track.');
+function missingTracks(extra = {}) {
+  return trackError('MISSING_MEDIA_TRACKS', 'This source does not contain both a video track and an audio track.', extra);
 }
 
 function protectedMedia() {

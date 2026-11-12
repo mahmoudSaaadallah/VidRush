@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { validateUrl, buildMedia, publicMedia, downloadArgs, sourceArgs } = require('../host/media.cjs');
+const { validateUrl, buildMedia, publicMedia, downloadArgs, sourceArgs, mergePairedInfos } = require('../host/media.cjs');
 const { extensionId, checksumFor } = require('../scripts/install.cjs');
 const formats = [
   { format_id: '22', url: 'https://cdn.test/v', height: 720, fps: 30, ext: 'mp4', vcodec: 'avc1', acodec: 'aac', tbr: 500, filesize: 100 },
@@ -100,4 +100,37 @@ test('installer computes stable Chrome extension ID and validates release checks
   assert.equal(checksumFor(`${'a'.repeat(64)}  yt-dlp.exe\n`, 'yt-dlp.exe'), 'a'.repeat(64));
   assert.equal(checksumFor(`${'b'.repeat(64)} *ffmpeg.zip\n`, 'ffmpeg.zip'), 'b'.repeat(64));
   assert.throws(() => checksumFor('invalid yt-dlp.exe', 'yt-dlp.exe'), /checksum/);
+});
+
+test('mergePairedInfos combines separate video and audio format trees with unique selectors and DRM guards', () => {
+  const videoInfo = {
+    title: 'Video only',
+    formats: [
+      { format_id: '1080', url: 'https://cdn.test/1080.m3u8', ext: 'mp4', height: 1080, fps: 30, vcodec: 'avc1', acodec: 'none' },
+      { format_id: '720', url: 'https://cdn.test/720.m3u8', ext: 'mp4', height: 720, fps: 30, vcodec: 'avc1', acodec: 'none' }
+    ]
+  };
+  const audioInfo = {
+    title: 'Audio only',
+    formats: [
+      { format_id: '128', url: 'https://cdn.test/audio.m3u8', ext: 'm4a', vcodec: 'none', acodec: 'aac', abr: 128 }
+    ]
+  };
+  const merged = mergePairedInfos(videoInfo, audioInfo, { title: 'Custom Title', referer: 'https://page.test/v', audioReferer: 'https://page.test/a' });
+  assert.equal(merged.title, 'Custom Title');
+  assert.equal(merged.formats.length, 3);
+  assert.equal(merged.formats[0].format_id, 'v-1080');
+  assert.equal(merged.formats[0].http_headers.Referer, 'https://page.test/v');
+  assert.equal(merged.formats[2].format_id, 'a-128');
+  assert.equal(merged.formats[2].http_headers.Referer, 'https://page.test/a');
+
+  const media = buildMedia(merged, true);
+  assert.equal(media.options.length, 2);
+  assert.equal(media.options[0].selector, 'v-1080+a-128');
+  assert.equal(media.options[0].needsMerge, true);
+  assert.equal(media.options[1].selector, 'v-720+a-128');
+  assert.equal(media.options[1].needsMerge, true);
+
+  assert.throws(() => mergePairedInfos({ has_drm: true }, {}), { code: 'DRM_PROTECTED' });
+  assert.throws(() => mergePairedInfos({}, { has_drm: true }), { code: 'DRM_PROTECTED' });
 });
