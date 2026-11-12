@@ -43,6 +43,25 @@ test('generic direct-video extractors with unknown codecs remain downloadable', 
   assert.equal(media.options[0].needsMerge, false);
 });
 
+test('demuxed HLS master manifests with unnamed audio codecs are paired and merged', () => {
+  const hlsFormats = [
+    { format_id: 'audio-low', url: 'https://cdn.test/a-low.m3u8', ext: 'mp4', vcodec: 'none', resolution: 'audio only', audio_ext: 'mp4', source_preference: 0 },
+    { format_id: 'audio-high', url: 'https://cdn.test/a-high.m3u8', ext: 'mp4', vcodec: 'none', resolution: 'audio only', audio_ext: 'mp4', source_preference: 1 },
+    { format_id: '1080p', url: 'https://cdn.test/1080.m3u8', ext: 'mp4', height: 1080, vcodec: 'avc1.640028', acodec: 'none', audio_ext: 'none', tbr: 3500 },
+    { format_id: '720p', url: 'https://cdn.test/720.m3u8', ext: 'mp4', height: 720, vcodec: 'avc1.4d001f', acodec: 'none', audio_ext: 'none', tbr: 2000 },
+  ];
+  const media = buildMedia({ title: 'Universal Stream', formats: hlsFormats }, true);
+  assert.equal(media.options.length, 2);
+  assert.equal(media.options[0].height, 1080);
+  assert.equal(media.options[0].selector, '1080p+audio-high');
+  assert.equal(media.options[0].container, 'mp4');
+  assert.equal(media.options[0].needsMerge, true);
+  assert.equal(media.options[1].height, 720);
+  assert.equal(media.options[1].selector, '720p+audio-high');
+  assert.equal(media.options[1].container, 'mp4');
+  assert.equal(media.options[1].needsMerge, true);
+});
+
 test('DRM, silent-only formats, playlists and unsupported pages are not offered', () => {
   assert.throws(() => buildMedia({ formats: formats.map(f => ({ ...f, has_drm: true })) }, true), { code: 'DRM_PROTECTED' });
   assert.throws(() => buildMedia({ has_drm: true, formats }, true), { code: 'DRM_PROTECTED' });
