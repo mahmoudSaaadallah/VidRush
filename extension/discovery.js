@@ -41,12 +41,28 @@ function discoverPageMedia(protectionOnly = false) {
     embeds.push({ url: url.href, referer: url.origin === page.origin ? page.href.split('#')[0] : page.origin + '/', area: box.width * box.height });
   }
   if (!hasDrm) {
+    for (const element of [...document.querySelectorAll('[data-account],video-js,.video-js')].slice(0, 30)) {
+      const account = element.getAttribute('data-account') || element.querySelector('[data-account]')?.getAttribute('data-account') || element.closest('[data-account]')?.getAttribute('data-account');
+      const videoId = element.getAttribute('data-video-id') || element.getAttribute('data-videoid') || element.querySelector('[data-video-id],[data-videoid]')?.getAttribute('data-video-id') || element.querySelector('[data-video-id],[data-videoid]')?.getAttribute('data-videoid') || element.closest('[data-video-id],[data-videoid]')?.getAttribute('data-video-id');
+      let player = element.getAttribute('data-player');
+      let embed = element.getAttribute('data-embed') || 'default';
+      if (!player) {
+        const match = element.className?.match?.(/\bbc-player-([a-zA-Z0-9-]+)(?:_([a-zA-Z0-9-]+))?\b/);
+        player = match?.[1] || 'default';
+        if (match?.[2]) embed = match[2];
+      }
+      if (/^\d+$/.test(account || '') && /^[0-9a-zA-Z_:-]+$/.test(videoId || '')) {
+        const v = element.tagName === 'VIDEO' ? element : element.querySelector('video');
+        const videoIndex = v ? videos.indexOf(v) : undefined;
+        add(`https://players.brightcove.net/${account}/${player}_${embed}/index.html?videoId=${videoId}`, true, videoIndex >= 0 ? videoIndex : undefined);
+      }
+    }
     for (const element of [...document.querySelectorAll('[class*="wistia_async_"],[data-wistia-id],[data-wistiaid],wistia-player[media-id]')].slice(0, 30)) {
       const id = element.getAttribute('media-id') || element.getAttribute('data-wistia-id') || element.getAttribute('data-wistiaid') || element.className?.match?.(/\bwistia_async_([a-z0-9]{10})\b/)?.[1];
       if (/^[a-z0-9]{10}$/.test(id || '')) add('https://fast.wistia.net/embed/iframe/' + id, true);
     }
   }
-  const rank = value => /\.m3u8(?:$|[?#])/i.test(value) ? (/master/i.test(value) ? 0 : 1) : /\.mpd(?:$|[?#])/i.test(value) ? 2 : /\.(mp4|webm|mov|m4v)(?:$|[?#])/i.test(value) ? 3 : 4;
+  const rank = value => /master/i.test(value) ? 0 : /(?:brightcove\.net|wistia\.net)/i.test(value) ? 1 : /\.m3u8(?:$|[?#])/i.test(value) ? 2 : /\.mpd(?:$|[?#])/i.test(value) ? 3 : /\.(mp4|webm|mov|m4v)(?:$|[?#])/i.test(value) ? 4 : 5;
   return { pageUrl: page.href, title: document.title.slice(0, 300), hasDrm, hasBlob,
     sources: [...sources.values()].sort((a, b) => rank(a.url) - rank(b.url)).slice(0, 8),
     embeds: embeds.sort((a, b) => b.area - a.area).slice(0, 4), playerOrigins: [...playerOrigins].slice(0, 12) };
