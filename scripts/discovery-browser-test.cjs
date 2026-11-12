@@ -78,13 +78,14 @@ async function run(chromium, extensionPath) {
     await page.route('https://**/*', route => route.abort());
     await page.evaluate(() => {
       document.querySelector('video').src = URL.createObjectURL(new Blob(['fixture'], { type: 'video/mp4' }));
-      document.body.insertAdjacentHTML('beforeend', '<iframe src="https://player.hotmart.com/embed/example?signature=private"></iframe><iframe src="https://unrelated.test/ad"></iframe><div class="wistia_embed wistia_async_abcdefghij"></div>');
+      document.body.insertAdjacentHTML('beforeend', '<iframe src="https://player.hotmart.com/embed/example?signature=private"></iframe><iframe src="https://unrelated.test/ad"></iframe><div class="wistia_embed wistia_async_abcdefghij"></div><div class="video-js bc-player-q7xJcHDcKT_default" data-account="6057955906001" data-video-id="1847146344589202484"></div>');
     });
     frames = await scan(worker);
     const main = frames[0].result;
     assert.ok(main.playerOrigins.includes('https://player.hotmart.com/*'));
     assert.ok(main.playerOrigins.includes('https://unrelated.test/*'), 'Frame discovery must not rely on player names.');
     assert.ok(main.sources.some(source => source.url === 'https://fast.wistia.net/embed/iframe/abcdefghij'));
+    assert.ok(main.sources.some(source => source.url === 'https://players.brightcove.net/6057955906001/q7xJcHDcKT_default/index.html?videoId=1847146344589202484'));
     assert.ok(main.sources.every(source => /^https?:/.test(source.url) && !source.url.includes('signature=private')));
     await page.locator('video').evaluate(async video => {
       const access = await navigator.requestMediaKeySystemAccess('org.w3.clearkey', [{

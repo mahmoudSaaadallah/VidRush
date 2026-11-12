@@ -307,3 +307,54 @@ test('opening a historical folder uses session metadata, never a caller-supplied
   h.respond(h.sent[0], { opened: true }); await opening;
   await assert.rejects(h.api.handle({ action: 'openFolder', jobId: 'missing' }), /غير موجود/);
 });
+
+test('a declared Brightcove player is prioritized over single-track rendition streams', async () => {
+  const brightcove = 'https://players.brightcove.net/6057955906001/q7xJcHDcKT_default/index.html?videoId=1847146344589202484';
+  const h = harness([], { page: { sources: [{ url: 'https://manifest.prod.boltdns.net/video/rendition.m3u8' }, { url: brightcove }] } });
+  await bootstrap(h);
+  const operation = h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video', scanPlayer: true });
+  await tick();
+  assert.equal(h.sent.at(-1).url, brightcove);
+  h.respond(h.sent.at(-1), { token: 'brightcove-complete' });
+  assert.equal((await operation).token, 'brightcove-complete');
+});
+
+test('discoverPageMedia reconstructs Brightcove embed player URLs from DOM elements', () => {
+  const code = fs.readFileSync(path.join(__dirname, '..', 'extension', 'discovery.js'), 'utf8');
+  const dom = {
+    location: { href: 'https://www.watchit.com/#/details/series/1183/play' },
+    document: {
+      title: 'WATCH IT',
+      baseURI: 'https://www.watchit.com/#/details/series/1183/play',
+      querySelectorAll(selector) {
+        if (selector === 'video') return [];
+        if (selector === 'iframe[src]') return [];
+        if (selector.includes('data-account')) {
+          return [{
+            tagName: 'DIV',
+            className: 'video-js bc-player-q7xJcHDcKT_default',
+            getAttribute(name) {
+              if (name === 'data-account') return '6057955906001';
+              if (name === 'data-video-id') return '1847146344589202484';
+              if (name === 'data-player') return 'q7xJcHDcKT';
+              if (name === 'data-embed') return 'default';
+              return null;
+            },
+            querySelector() { return null; },
+            closest() { return null; },
+          }];
+        }
+        return [];
+      },
+    },
+    performance: { getEntriesByType() { return []; } },
+    URL,
+  };
+  const context = vm.createContext(dom);
+  vm.runInContext(code, context);
+  const result = vm.runInContext('discoverPageMedia()', context);
+  assert.equal(result.hasDrm, false);
+  const expectedUrl = 'https://players.brightcove.net/6057955906001/q7xJcHDcKT_default/index.html?videoId=1847146344589202484';
+  assert.ok(result.sources.some(s => s.url === expectedUrl));
+  assert.equal(result.sources[0].referer, 'https://www.watchit.com/');
+});
