@@ -141,7 +141,7 @@ Changing the page URL, replacing the video element, changing its source/declared
 
 The cache keeps up to **eight recent tabs** in memory during the current companion connection. It is not a permanent download-link history and is not saved to disk. Closing a tab, restarting Chrome/the companion, or reloading the extension clears its usable selections. If a selection is evicted, a browser-only file catalogue disappears, or the player identity cannot be verified, VidRush safely analyzes again. Hidden changes inside a private player API may still require Refresh.
 
-Existing users can run **`Update.cmd`**, finish active downloads, and reload VidRush at `chrome://extensions`. Confirm **v0.3.2** in the footer. Updating enables ultra-fast media inspection (fast-tracking detected streams without slow page-URL waits, early video/audio stream pairing, parallel companion stream inspection, and live detected stream count indicators in the popup).
+Existing users can run **`Update.cmd`**, finish active downloads, and reload VidRush at `chrome://extensions`. Confirm **v0.3.4** in the footer. Updating enables automatic background pre-arming on candidate video URLs (YouTube, Facebook, Vimeo, and sniffed streams) with verified cache reuse, ensuring the toolbar badge only appears when media is fully inspected and ready for immediate 0-second downloads upon opening the popup.
 
 ### Embedded players and signed-in lessons
 
