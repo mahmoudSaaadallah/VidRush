@@ -22,13 +22,15 @@ class Companion {
     this.browserJobs = new Map();
     this.children = new Set();
     this.inspections = 0;
+    this.inspectionControllers = new Map();
     this.choosingFolder = false;
     this.configPath = options.configPath;
     this.pickFolder = options.selectFolder || selectFolder;
   }
 
-  run(args, { timeout = 90000, onLine, executable = this.config.ytdlpPath } = {}) {
+  run(args, { timeout = 90000, onLine, executable = this.config.ytdlpPath, signal } = {}) {
     return new Promise((resolve, reject) => {
+      signal?.throwIfAborted();
       const child = this.spawn(executable, args, { windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
       this.children.add(child);
       let stdout = '';
@@ -37,6 +39,9 @@ class Companion {
       child.stdout.setEncoding('utf8');
       child.stderr.setEncoding('utf8');
       const timer = timeout ? setTimeout(() => { timedOut = true; this.stop(child); }, timeout) : null;
+      const abort = () => this.stop(child);
+      signal?.addEventListener('abort', abort, { once: true });
+      const cleanup = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); this.children.delete(child); };
       child.stdout.on('data', data => {
         if (!onLine) {
           stdout += data.toString('utf8');
@@ -45,11 +50,11 @@ class Companion {
       });
       if (onLine) createInterface({ input: child.stdout }).on('line', onLine);
       child.stderr.on('data', data => { stderr = (stderr + data.toString('utf8')).slice(-6000); });
-      child.on('error', error => { clearTimeout(timer); this.children.delete(child); reject(error); });
+      child.on('error', error => { cleanup(); reject(error); });
       child.on('close', code => {
-        clearTimeout(timer);
-        this.children.delete(child);
-        if (timedOut) reject(new Error('Video analysis timed out. Try again or open the individual video page.'));
+        cleanup();
+        if (signal?.aborted) reject(new Error('Video inspection cancelled.'));
+        else if (timedOut) reject(new Error('Video analysis timed out. Try again or open the individual video page.'));
         else if (code !== 0) reject(new Error(stderr.trim() || `${path.basename(executable)} exited with code ${code}.`));
         else resolve(stdout);
       });
@@ -60,7 +65,7 @@ class Companion {
   async probeTracks(input, network) {
     const executable = path.join(this.config.ffmpegPath, process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe');
     const timeout = network?.ext === 'ts' ? 5000 : 8000;
-    return readTracks(await this.run(trackProbeArgs(input, network), { executable, timeout }));
+    return readTracks(await this.run(trackProbeArgs(input, network), { executable, timeout, signal: network?.signal }));
   }
 
   async resolveAmbiguousTracks(info, context) {
@@ -119,6 +124,15 @@ class Companion {
     } else child.kill('SIGTERM');
   }
 
+  rememberMedia(media) {
+    this.media.set(media.token, media);
+    if (this.media.size > 32) {
+      const token = this.media.keys().next().value;
+      this.media.delete(token);
+      this.emit({ event: 'mediaExpired', token });
+    }
+  }
+
   async handle(message) {
     const { id, action } = message || {};
     if (typeof id !== 'string' || id.length > 100) return;
@@ -128,7 +142,10 @@ class Companion {
         this.versionPromise ||= this.run(['--version'], { timeout: 15000 }).then(version => version.trim()).catch(error => { this.versionPromise = null; throw error; });
         const version = await this.versionPromise;
         data = { version, ffmpeg: !!this.config.ffmpegPath, downloadDir: this.config.downloadDir, choosingFolder: this.choosingFolder,
-          protocolVersion: 7, capabilities: { folderPicker: true, openFolder: true, pageSources: true, sourceContext: true, browserTransfer: true, browserQualities: true, analysisCache: true, pairedStreams: true } };
+          protocolVersion: 8, capabilities: { folderPicker: true, openFolder: true, pageSources: true, sourceContext: true, browserTransfer: true, browserQualities: true, analysisCache: true, pairedStreams: true, cancelInspection: true, mediaExpiryEvents: true } };
+      } else if (action === 'cancelInspection') {
+        this.inspectionControllers.get(message.requestId)?.abort();
+        data = { cancelled: true };
       } else if (action === 'cachedMedia') {
         const media = this.media.get(message.token);
         if (media) { this.media.delete(message.token); this.media.set(message.token, media); }
@@ -150,11 +167,13 @@ class Companion {
         if (this.inspections >= 2) throw new Error('Video analysis is already running. Wait a moment and retry.');
         const url = validateUrl(message.url);
         const audioUrl = message.audioUrl ? validateUrl(message.audioUrl) : null;
-        const context = { userAgent: message.userAgent, origin: message.origin };
+        const controller = new AbortController();
+        const context = { userAgent: message.userAgent, origin: message.origin, signal: controller.signal };
         const headers = sourceArgs(message.referer, context);
         this.inspections++;
+        this.inspectionControllers.set(id, controller);
         try {
-          const raw = await this.run([...baseArgs(this.config), ...headers, '--skip-download', '--dump-single-json', '--', url]);
+          const raw = await this.run([...baseArgs(this.config), ...headers, '--skip-download', '--dump-single-json', '--', url], { signal: controller.signal });
           let info = JSON.parse(raw);
           // Generic extractors wrap a single embedded video in a playlist result.
           // Do not expand real playlists, unresolved entries, or multiple videos.
@@ -162,7 +181,7 @@ class Companion {
           await this.resolveAmbiguousTracks(info, { ...context, referer: message.referer });
           if (audioUrl) {
             const audioHeaders = sourceArgs(message.audioReferer || message.referer, context);
-            const audioRaw = await this.run([...baseArgs(this.config), ...audioHeaders, '--skip-download', '--dump-single-json', '--', audioUrl]);
+            const audioRaw = await this.run([...baseArgs(this.config), ...audioHeaders, '--skip-download', '--dump-single-json', '--', audioUrl], { signal: controller.signal });
             let audioInfo = JSON.parse(audioRaw);
             if (audioInfo.entries?.length === 1 && audioInfo.entries[0]?.formats) audioInfo = audioInfo.entries[0];
             await this.resolveAmbiguousTracks(audioInfo, { ...context, referer: message.audioReferer || message.referer });
@@ -170,14 +189,14 @@ class Companion {
           }
           const media = buildMedia(info, !!this.config.ffmpegPath);
           if (message.referer && typeof message.title === 'string' && message.title.trim()) media.title = message.title.trim().slice(0, 300);
-          this.media.set(media.token, { ...media, url, referer: message.referer, context, pairedInfo: audioUrl ? info : null });
-          if (this.media.size > 8) this.media.delete(this.media.keys().next().value);
+          controller.signal.throwIfAborted();
+          const { signal, ...downloadContext } = context;
+          this.rememberMedia({ ...media, url, referer: message.referer, context: downloadContext, pairedInfo: audioUrl ? info : null });
           data = publicMedia(media);
-        } finally { this.inspections--; }
+        } finally { this.inspections--; this.inspectionControllers.delete(id); }
       } else if (action === 'prepareBrowser') {
         const media = browserMedia(message.metadata);
-        this.media.set(media.token, media);
-        if (this.media.size > 8) this.media.delete(this.media.keys().next().value);
+        this.rememberMedia(media);
         data = publicMedia(media);
       } else if (['browserChunk', 'browserFinish', 'browserAbort'].includes(action)) {
         const transfer = this.browserJobs.get(message.jobId);
