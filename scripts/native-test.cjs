@@ -84,7 +84,7 @@ async function main() {
         const request = pending.get(message.id);
         if (!request) return;
         clearTimeout(request.timer); pending.delete(message.id);
-        message.ok ? request.resolve(message.data) : request.reject(new Error(message.error));
+        message.ok ? request.resolve(message.data) : request.reject(new Error(request.description + ': ' + message.error));
       }
     }));
     child.on('exit', code => {
@@ -95,7 +95,7 @@ async function main() {
     const request = (action, data = {}) => new Promise((resolve, reject) => {
       const key = String(++id);
       const timer = setTimeout(() => { pending.delete(key); reject(new Error(`Timed out: ${action}`)); }, 100000);
-      pending.set(key, { resolve, reject, timer });
+      pending.set(key, { resolve, reject, timer, description: action + (data.url ? ' ' + new URL(data.url).pathname : '') });
       child.stdin.write(encode({ id: key, action, ...data }));
     });
     const finishedJob = async id => {

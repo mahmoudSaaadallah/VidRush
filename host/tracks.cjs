@@ -41,7 +41,8 @@ async function clearHlsSamples(url, context) {
   if (context.userAgent) headers['User-Agent'] = context.userAgent;
   if (context.referer) headers.Referer = context.referer;
   if (context.origin) headers.Origin = context.origin;
-  const response = await fetch(url, { headers, redirect: 'error', signal: AbortSignal.timeout(3000) });
+  const signal = context.signal ? AbortSignal.any([context.signal, AbortSignal.timeout(3000)]) : AbortSignal.timeout(3000);
+  const response = await fetch(url, { headers, redirect: 'error', signal });
   if (!response.ok || !response.body) {
     await response.body?.cancel();
     return [];

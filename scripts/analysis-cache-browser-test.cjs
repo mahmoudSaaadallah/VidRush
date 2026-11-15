@@ -31,6 +31,9 @@ async function run(chromium, extensionPath) {
     // Only the native companion is mocked. The popup, worker, DOM identity checks,
     // capture invalidation and Chrome document IDs all use the shipped code.
     await worker.evaluate(() => {
+      // This suite isolates manual cache invalidation. The autonomous suite
+      // separately exercises the shipped scheduler with no popup at all.
+      capturePaused = true;
       globalThis.cacheTest = { inspections: 0, checks: 0, tokens: new Set() };
       request = async (action, data = {}) => {
         if (action === 'ping') return { version: 'cache-test', downloadDir: 'test', capabilities: { analysisCache: true, pageSources: true, sourceContext: true, folderPicker: true, openFolder: true } };

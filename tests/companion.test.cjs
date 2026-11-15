@@ -74,6 +74,30 @@ function harness(options = {}) {
   return { companion, events, calls, directory, configPath, cleanup: () => fs.rmSync(directory, { recursive: true, force: true }) };
 }
 
+test('cancelling an inspection stops its process without cancelling a download', async t => {
+  const h = harness(); t.after(h.cleanup);
+  h.companion.stop = child => child?.kill();
+  const inspection = h.companion.handle({ id: 'metadata', action: 'inspect', url: 'https://test.test/video.mp4' });
+  assert.equal(h.companion.inspections, 1);
+  const unrelated = { id: 'download', status: 'downloading' };
+  h.companion.jobs.set(unrelated.id, unrelated);
+  await h.companion.handle({ id: 'cancel-metadata', action: 'cancelInspection', requestId: 'metadata' });
+  await inspection;
+  assert.equal(h.calls[0].child.exitCode, 1);
+  assert.equal(h.companion.inspections, 0);
+  assert.equal(h.companion.inspectionControllers.size, 0);
+  assert.equal(h.companion.media.size, 0);
+  assert.equal(unrelated.status, 'downloading');
+  assert.equal(h.events.find(event => event.id === 'metadata').ok, false);
+});
+
+test('native cache eviction reports the expired opaque token without exposing its source', t => {
+  const h = harness(); t.after(h.cleanup);
+  for (let i = 0; i < 33; i++) h.companion.rememberMedia({ token: 'token-' + i, url: 'https://private.test/video?signature=secret' });
+  assert.equal(h.companion.media.size, 32);
+  assert.deepEqual(h.events, [{ event: 'mediaExpired', token: 'token-0' }]);
+});
+
 test('download responds with serializable job and emits progress and completion', async t => {
   const h = harness(); t.after(h.cleanup);
   const media = buildMedia({ title: 'Test', formats: [{ format_id: 'test', url: 'https://test.test/v', height: 720, ext: 'mp4', vcodec: 'avc1', acodec: 'aac' }] }, true);

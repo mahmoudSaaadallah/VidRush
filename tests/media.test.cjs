@@ -43,6 +43,12 @@ test('generic direct-video extractors with unknown codecs remain downloadable', 
   assert.equal(media.options[0].needsMerge, false);
 });
 
+test('a probed audio codec takes precedence over a generic extractor audio_ext hint', () => {
+  const media = buildMedia({ formats: [{ format_id: 'mp4', url: 'https://example.com/video.mp4', ext: 'mp4', vcodec: 'h264', acodec: 'aac', audio_ext: 'none' }] }, true);
+  assert.equal(media.options.length, 1);
+  assert.equal(media.options[0].needsMerge, false);
+});
+
 test('demuxed HLS master manifests with unnamed audio codecs are paired and merged', () => {
   const hlsFormats = [
     { format_id: 'audio-low', url: 'https://cdn.test/a-low.m3u8', ext: 'mp4', vcodec: 'none', resolution: 'audio only', audio_ext: 'mp4', source_preference: 0 },
