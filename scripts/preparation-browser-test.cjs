@@ -9,7 +9,7 @@ const { Companion } = require('../host/companion.cjs');
 
 async function run(chromium, extensionPath, realNative = false) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vidrush-preparation-'));
-  let context, companion, server, releaseSlow;
+  let context, companion, server, releaseSlow, heldSlow = false;
   const replies = new Map(), calls = [], errors = [], tokens = new Set();
   const mediaFile = path.join(root, 'sample.mp4');
   if (realNative) {
@@ -32,7 +32,10 @@ async function run(chromium, extensionPath, realNative = false) {
       let data;
       if (message.action === 'ping') data = { version: 'browser-fixture', downloadDir: 'test', capabilities: { pageSources: true, sourceContext: true, analysisCache: true, cancelInspection: true, mediaExpiryEvents: true, folderPicker: true, openFolder: true } };
       else if (message.action === 'inspect') {
-        if (message.url.endsWith('/slow.mp4')) await new Promise(resolve => { releaseSlow = resolve; });
+        if (message.url.endsWith('/slow.mp4') && !heldSlow) {
+          heldSlow = true;
+          await new Promise(resolve => { releaseSlow = resolve; });
+        }
         const token = 'prepared-' + inspectCount(); tokens.add(token);
         data = { token, title: new URL(message.url).pathname, site: 'Local fixture', options: [360, 720].map(height => ({ id: String(height), height, label: height + 'p · MP4', container: 'mp4' })) };
       } else if (message.action === 'cachedMedia') data = { available: tokens.has(message.token) };
