@@ -17,10 +17,11 @@ function mediaKind(value, contentType = '') {
 }
 
 class CaptureSession {
-  constructor({ now = Date.now, save = () => {}, changed = () => {}, onBadge = () => {}, autoSniff = false } = {}) {
-    this.now = now; this.save = save; this.changed = changed; this.onBadge = onBadge; this.autoSniff = autoSniff;
+  constructor({ now = Date.now, save = () => {}, changed = () => {}, discovered = () => {}, autoSniff = false } = {}) {
+    this.now = now; this.save = save; this.changed = changed; this.discovered = discovered; this.autoSniff = autoSniff;
     this.session = null; this.pending = new Map(); this.sources = new Map(); this.frames = new Map();
     this.tabSources = new Map();
+    this.documents = new Map();
     this.paused = false;
   }
   restore(value) {
@@ -47,7 +48,6 @@ class CaptureSession {
     this.save(null);
     if (tabId !== undefined) {
       this.changed(tabId, true);
-      this.onBadge(tabId, 0);
     }
   }
   navigate(tabId, url) {
@@ -56,18 +56,31 @@ class CaptureSession {
     this.pending.clear(); this.sources.clear(); this.frames.clear();
     this.persist(); this.changed(tabId, true);
   }
-  clearTab(tabId) {
-    this.tabSources.delete(tabId);
-    this.onBadge(tabId, 0);
+  clearTab(tabId, documentId) {
+    if (documentId && this.tabSources.has(tabId)) {
+      for (const [key, entry] of this.tabSources.get(tabId)) if (entry.documentId !== documentId) this.tabSources.get(tabId).delete(key);
+    } else this.tabSources.delete(tabId);
+    this.documents.delete(tabId);
+    for (const [id, entry] of this.pending) if (entry.tabId === tabId && (!documentId || entry.documentId !== documentId)) this.pending.delete(id);
+  }
+  clearFrame(tabId, frameId, documentId) {
+    let frames = this.documents.get(tabId);
+    if (!frames) this.documents.set(tabId, frames = new Map());
+    frames.set(frameId, documentId);
+    for (const collection of [this.tabSources.get(tabId), this.active(tabId) ? this.sources : null]) {
+      for (const [key, source] of collection || []) if (source.frameId === frameId && source.documentId !== documentId) collection.delete(key);
+    }
+    for (const [id, entry] of this.pending) if (entry.tabId === tabId && entry.frameId === frameId && entry.documentId !== documentId) this.pending.delete(id);
   }
   before(details) {
-    if (this.paused || !this.autoSniff && !this.active(details.tabId)) return;
+    if (details.tabId < 0 || this.paused || !this.autoSniff && !this.active(details.tabId)) return;
     if (details.type === 'main_frame') {
       if (this.active(details.tabId)) this.navigate(details.tabId, details.url);
       this.clearTab(details.tabId);
       return;
     }
     if (details.type === 'sub_frame') {
+      this.clearFrame(details.tabId, details.frameId);
       if (this.active(details.tabId)) {
         this.frames.set(details.frameId, (this.frames.get(details.frameId) || 0) + 1);
         for (const [key, source] of this.sources) if (source.frameId === details.frameId) this.sources.delete(key);
@@ -87,6 +100,8 @@ class CaptureSession {
     if (this.paused || !this.autoSniff && !this.active(details.tabId)) return;
     const entry = this.pending.get(details.requestId);
     if (!entry) return;
+    const documentId = this.documents.get(details.tabId)?.get(entry.frameId);
+    if (documentId && entry.documentId && documentId !== entry.documentId) return;
     entry.headersObserved = true;
     // Never retain cookies, authorization, request bodies, or arbitrary headers.
     for (const header of details.requestHeaders || []) {
@@ -101,6 +116,8 @@ class CaptureSession {
     if (!this.autoSniff && !this.active(details.tabId)) return;
     const entry = this.pending.get(details.requestId);
     if (!entry) return;
+    const documentId = this.documents.get(details.tabId)?.get(entry.frameId);
+    if (documentId && entry.documentId && documentId !== entry.documentId) return;
     if (this.active(details.tabId) && (entry.epoch !== this.session.epoch || entry.frameEpoch !== (this.frames.get(entry.frameId) || 0))) return;
     const type = (details.responseHeaders || []).find(header => header.name.toLowerCase() === 'content-type')?.value || '';
     const kind = mediaKind(details.url, type);
@@ -118,9 +135,10 @@ class CaptureSession {
         this.tabSources.set(details.tabId, tabMap);
         if (this.tabSources.size > 32) this.tabSources.delete(this.tabSources.keys().next().value);
       }
+      const previous = tabMap.get(key);
       tabMap.set(key, { ...source, url: key, kind });
       if (tabMap.size > 20) tabMap.delete(tabMap.keys().next().value);
-      this.onBadge(details.tabId, tabMap.size);
+      if (!previous || previous.documentId !== source.documentId || previous.referer !== source.referer || previous.origin !== source.origin) this.discovered(details.tabId);
     }
 
     if (this.active(details.tabId)) {

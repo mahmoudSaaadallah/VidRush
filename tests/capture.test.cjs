@@ -64,11 +64,11 @@ test('expiration and stop purge pending context and signed media, and captures a
   assert.equal(h.saved.at(-1), null);
 });
 
-test('auto-sniff detects media across background tabs and emits badge counts', () => {
-  const badges = {};
+test('auto-sniff detects media across background tabs and emits new-candidate hints', () => {
+  const discoveries = [];
   const capture = new CaptureSession({
     autoSniff: true,
-    onBadge: (tabId, count) => { badges[tabId] = count; }
+    discovered: tabId => discoveries.push(tabId)
   });
 
   const req1 = { requestId: 'req-1', tabId: 5, frameId: 0, method: 'GET', url: 'https://cdn.test/hls/master.m3u8' };
@@ -76,7 +76,7 @@ test('auto-sniff detects media across background tabs and emits badge counts', (
   capture.headers({ ...req1, requestHeaders: [{ name: 'Referer', value: 'https://site.test/' }] });
   capture.response({ ...req1, statusCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'application/vnd.apple.mpegurl' }] });
 
-  assert.equal(badges[5], 1);
+  assert.deepEqual(discoveries, [5]);
   const sources = capture.read(5, 'https://site.test/lesson');
   assert.equal(sources.length, 1);
   assert.equal(sources[0].url, 'https://cdn.test/hls/master.m3u8');
@@ -85,9 +85,23 @@ test('auto-sniff detects media across background tabs and emits badge counts', (
   const req2 = { requestId: 'req-2', tabId: 5, frameId: 0, method: 'GET', url: 'https://cdn.test/video.mp4' };
   capture.before(req2);
   capture.response({ ...req2, statusCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'video/mp4' }] });
-  assert.equal(badges[5], 2);
+  assert.deepEqual(discoveries, [5, 5]);
 
   capture.clearTab(5);
-  assert.equal(badges[5], 0);
+  assert.deepEqual(discoveries, [5, 5]);
   assert.equal(capture.read(5, 'https://site.test/lesson').length, 0);
+});
+
+test('document commits preserve early responses for the new page and reject late old-document traffic', () => {
+  const capture = new CaptureSession({ autoSniff: true });
+  const request = (id, documentId) => ({ requestId: id, tabId: 1, frameId: 0, documentId, method: 'GET', url: 'https://cdn.test/' + id + '.mp4' });
+  capture.before(request('old', 'old-document'));
+  capture.before(request('new', 'new-document'));
+  capture.clearTab(1, 'new-document'); capture.clearFrame(1, 0, 'new-document');
+  capture.response({ ...request('old', 'old-document'), statusCode: 200 });
+  capture.response({ ...request('new', 'new-document'), statusCode: 200 });
+  assert.deepEqual(capture.read(1).map(source => source.url), ['https://cdn.test/new.mp4']);
+  capture.before(request('late-old', 'old-document'));
+  capture.response({ ...request('late-old', 'old-document'), statusCode: 200 });
+  assert.equal(capture.read(1).length, 1);
 });

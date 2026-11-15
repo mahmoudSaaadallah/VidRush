@@ -18,7 +18,12 @@ function snapshotPlayerIdentity(videoIndex) {
       const area = node => { const box = node.getBoundingClientRect(); return box.width * box.height; };
       return area(b) - area(a);
     })[0];
-    const videos = [...document.querySelectorAll('video')].slice(0, 30);
+    const videos = [], roots = [document];
+    for (let index = 0; index < roots.length && videos.length < 30; index++) {
+      const root = roots[index];
+      for (const video of root.querySelectorAll('video')) if (!videos.includes(video)) videos.push(video);
+      for (const element of root.querySelectorAll('*')) if (element.shadowRoot && !roots.includes(element.shadowRoot)) roots.push(element.shadowRoot);
+    }
     const video = Number.isInteger(videoIndex) ? videos[videoIndex] : largest(videos);
     let player;
     if (video) {

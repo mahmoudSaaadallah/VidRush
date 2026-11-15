@@ -154,7 +154,8 @@ function discoverPageMedia(protectionOnly = false) {
     }
   }
   const rank = value => /(?:master|playlist|manifest)/i.test(value) ? 0 : /(?:brightcove\.net|wistia\.net|vimeo\.com|youtube\.com|dailymotion\.com)/i.test(value) ? 1 : /\.m3u8(?:$|[?#])/i.test(value) ? 2 : /\.mpd(?:$|[?#])/i.test(value) ? 3 : /\.(mp4|webm|mov|m4v)(?:$|[?#])/i.test(value) ? 4 : 5;
-  return { pageUrl: page.href, title: document.title.slice(0, 300), hasDrm, hasBlob,
+  const primaryVideoIndex = videos.findIndex(video => !video.paused) >= 0 ? videos.findIndex(video => !video.paused) : 0;
+  return { pageUrl: page.href, title: document.title.slice(0, 300), hasDrm, hasBlob, videoCount: videos.length, primaryVideoIndex,
     sources: [...sources.values()].sort((a, b) => rank(a.url) - rank(b.url)).slice(0, 8),
     embeds: embeds.sort((a, b) => b.area - a.area).slice(0, 4), playerOrigins: [...playerOrigins].slice(0, 12) };
 }

@@ -11,7 +11,7 @@ function harness(initialJobs = [], options = {}) {
   const port = {
     onMessage: { addListener(fn) { callbacks.message = fn; } },
     onDisconnect: { addListener(fn) { callbacks.disconnect = fn; } },
-    postMessage(message) { sent.push(message); },
+    postMessage(message) { sent.push(message); options.native?.(message, value => callbacks.message(value)); },
   };
   const badges = {}, badgeColors = {};
   const chrome = {
@@ -24,8 +24,9 @@ function harness(initialJobs = [], options = {}) {
       id: 'test-extension', getURL: suffix => `chrome-extension://test-extension/${suffix}`,
       connectNative: () => port, onMessage: { addListener(fn) { callbacks.external = fn; } },
     },
-    storage: { session: { get: async () => ({ jobs: initialJobs }), set: async data => Object.assign(stored, JSON.parse(JSON.stringify(data))) } },
-    tabs: { get: async id => ({ id, url: 'https://example.com/video' }), onRemoved: { addListener(fn) { callbacks.tabRemoved = fn; } }, onUpdated: { addListener(fn) { callbacks.tabUpdated = fn; } } },
+    storage: { local: { get: async () => options.preferences || {}, set: async data => Object.assign(options.preferences ||= {}, data) }, session: { get: async () => ({ jobs: initialJobs, ...options.session }), set: async data => Object.assign(stored, JSON.parse(JSON.stringify(data))) } },
+    webNavigation: Object.fromEntries(['onCommitted', 'onHistoryStateUpdated', 'onReferenceFragmentUpdated'].map(name => [name, { addListener(fn) { callbacks[name] = fn; } }])),
+    tabs: { query: async () => [], onActivated: { addListener(fn) { callbacks.activated = fn; } }, get: async id => ({ id, url: 'https://example.com/video' }), onRemoved: { addListener(fn) { callbacks.tabRemoved = fn; } }, onUpdated: { addListener(fn) { callbacks.tabUpdated = fn; } } },
     permissions: { contains: async () => options.full === true, onRemoved: { addListener(fn) { callbacks.revoked = fn; } } },
     webRequest: Object.fromEntries(['onBeforeRequest', 'onBeforeSendHeaders', 'onResponseStarted', 'onCompleted', 'onErrorOccurred'].map(name => [name, { addListener(fn) { callbacks[name] = fn; } }])),
     scripting: { executeScript: async script => {
@@ -38,11 +39,12 @@ function harness(initialJobs = [], options = {}) {
         : [{ frameId: 0, result: { pageUrl: 'https://example.com/video', sources: [], playerOrigins: [], ...options.page } }, ...(options.frames || [])];
     } },
   };
-  const context = vm.createContext({ chrome, setTimeout, clearTimeout, console, URL, crypto,
+  const context = vm.createContext({ chrome, setTimeout, clearTimeout, console, URL, crypto, AbortController,
     importScripts: filename => vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'extension', filename), 'utf8'), context) });
-  vm.runInContext(`${fs.readFileSync(path.join(__dirname, '..', 'extension', 'background.js'), 'utf8')}\nglobalThis.api = { handle };`, context);
+  vm.runInContext(`${fs.readFileSync(path.join(__dirname, '..', 'extension', 'background.js'), 'utf8')}\nglobalThis.api = { handle, preparationQueue, preparedSnapshot, hintPreparation, prepareInBackground, resetPreparation, invalidateChangedPlayers, expirePrepared };`, context);
+  if (!options.automatic) { context.api.preparationQueue.schedule = () => Promise.resolve(); }
   const respond = (message, data) => callbacks.message({ id: message.id, ok: true, data });
-  return { api: context.api, sent, stored, callbacks, respond, chrome, identity, badges, badgeColors };
+  return { context, api: context.api, sent, stored, callbacks, respond, chrome, identity, badges, badgeColors };
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
@@ -362,7 +364,9 @@ test('demuxed video-only and audio-only streams are paired into a combined candi
   h.respond(pairedRequest, { token: 'paired-token', options: [{ id: 'opt-1' }] });
   const result = await operation;
   assert.equal(result.token, 'paired-token');
-  assert.match(result.detectedSources[0].label, /^بث مدمج/);
+  assert.equal(result.detectedSources.length, 1, 'The paired tracks form one ready video.');
+  assert.equal(result.sourceIndex, 'ready:paired-token');
+  assert.equal(h.badges[1], '1');
 });
 
 test('discoverPageMedia reconstructs Brightcove embed player URLs from DOM elements', () => {
@@ -676,7 +680,7 @@ test('browserFrameFile hooks MSE SourceBuffer, probes recorded chunks, and strea
   assert.deepEqual(reconstructed, mediaChunk);
 });
 
-test('automatic background media sniffer updates badge and pre-arms analysis', async () => {
+test('passive network candidates do not claim readiness before inspection', async () => {
   const h = harness([], { full: true });
   await bootstrap(h);
 
@@ -686,8 +690,8 @@ test('automatic background media sniffer updates badge and pre-arms analysis', a
   h.callbacks.onResponseStarted({ ...network, statusCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'application/vnd.apple.mpegurl' }] });
   await tick();
 
-  assert.equal(h.badges[3], '1');
-  assert.equal(h.badgeColors[3], '#2563eb');
+  assert.equal(h.badges[3] || '', '');
+  assert.equal(h.sent.filter(message => message.action === 'inspect').length, 0);
 
   const operation = h.api.handle({ action: 'analyze', tabId: 3, url: 'https://example.com/video' });
   await tick();
@@ -700,4 +704,154 @@ test('automatic background media sniffer updates badge and pre-arms analysis', a
 
   h.callbacks.tabUpdated(3, { url: 'https://other-site.test/' });
   assert.equal(h.badges[3], '');
+});
+
+
+const waitUntil = async condition => {
+  const end = Date.now() + 3000;
+  while (!condition()) { if (Date.now() > end) throw new Error('Timed out waiting for background preparation'); await new Promise(resolve => setTimeout(resolve, 5)); }
+};
+function automaticHarness(t, options = {}) {
+  let inspections = 0;
+  const tokens = new Set();
+  const h = harness([], { full: true, automatic: true, ...options, native(message, reply) {
+    const send = data => queueMicrotask(() => reply({ id: message.id, ok: true, data }));
+    if (message.action === 'ping') send({ capabilities: { pageSources: true, sourceContext: true, analysisCache: true, pairedStreams: true, cancelInspection: true, mediaExpiryEvents: true } });
+    else if (message.action === 'cachedMedia') send({ available: tokens.has(message.token) });
+    else if (message.action === 'status' || message.action === 'cancelInspection') send([]);
+    else if (message.action === 'inspect') {
+      inspections++;
+      const media = { token: 'ready-' + inspections, title: 'Prepared video', options: [{ id: '1080', height: 1080 }, { id: '720', height: 720 }] };
+      tokens.add(media.token);
+      if (options.inspect) options.inspect(message, reply, media);
+      else send(media);
+    } else throw new Error('Unexpected native action: ' + message.action);
+  } });
+  h.api.preparationQueue.delay = 0;
+  t.after(() => { for (let id = 0; id < 40; id++) h.api.resetPreparation(id); });
+  const network = (url, tabId = 1, requestId = url) => {
+    const request = { requestId, tabId, frameId: 0, documentId: 'main-document', method: 'GET', url };
+    h.callbacks.onBeforeRequest(request);
+    h.callbacks.onResponseStarted({ ...request, statusCode: 200 });
+    h.callbacks.onCompleted(request);
+  };
+  return Object.assign(h, { network, tokens, inspections: () => inspections });
+}
+
+test('a cold worker prepares real quality choices from network traffic without bootstrap or popup messages', async t => {
+  const h = automaticHarness(t);
+  h.network('https://cdn.test/master.m3u8?signature=private');
+  await waitUntil(() => h.badges[1] === '1');
+  assert.equal(h.sent[0].action, 'ping');
+  assert.equal(h.sent.filter(item => item.action === 'inspect').length, 1);
+  assert.equal(h.sent.find(item => item.action === 'inspect').url, 'https://cdn.test/master.m3u8?signature=private');
+  assert.equal(h.api.preparedSnapshot(1).media.options.length, 2);
+  assert.equal(JSON.stringify(h.stored).includes('signature=private'), false);
+  const reopened = await h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video' });
+  assert.equal(reopened.options.length, 2);
+  assert.equal(h.inspections(), 1, 'Opening the popup must consume the existing result.');
+  h.network('https://cdn.test/master.m3u8?signature=private');
+  h.network('https://cdn.test/variant.m3u8');
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(h.badges[1], '1'); assert.equal(h.inspections(), 1);
+});
+
+test('a numeric badge waits for inspection and an empty quality result is never ready', async t => {
+  let finish;
+  const h = automaticHarness(t, { inspect(message, reply) { finish = data => reply({ id: message.id, ok: true, data }); } });
+  h.network('https://cdn.test/movie.m3u8');
+  await waitUntil(() => finish);
+  assert.equal(h.badges[1], '…');
+  finish({ token: 'empty', options: [] });
+  await waitUntil(() => h.badges[1] === '!');
+  assert.equal(h.api.preparedSnapshot(1).count, 0);
+});
+
+test('multiple declared players prepare independently while qualities of one player count once', async t => {
+  const h = automaticHarness(t, {
+    page: { videoCount: 2, primaryVideoIndex: 0, sources: [
+      { url: 'https://cdn.test/a.mp4', videoIndex: 0 }, { url: 'https://cdn.test/a-low.mp4', videoIndex: 0 },
+      { url: 'https://cdn.test/b.mp4', videoIndex: 1 },
+    ] },
+    executeScript: async script => script.func?.name === 'snapshotPlayerIdentity'
+      ? [{ documentId: 'main-document', frameId: 0, result: 'player-' + (script.args[0] ?? 0) }] : undefined,
+  });
+  h.callbacks.external({ action: 'playerChanged' }, { id: 'test-extension', tab: { id: 1 }, frameId: 0 }, () => {});
+  await waitUntil(() => h.badges[1] === '2');
+  assert.equal(h.inspections(), 2);
+  const state = h.api.preparedSnapshot(1);
+  assert.equal(state.media.detectedSources.length, 2);
+  const chosen = await h.api.handle({ action: 'selectSource', tabId: 1, url: 'https://example.com/video', sourceIndex: state.media.detectedSources[1].index });
+  assert.equal(chosen.token, 'ready-2'); assert.equal(h.inspections(), 2);
+});
+
+test('navigation cancels stale inspection and late responses cannot restore its badge', async t => {
+  let finish;
+  const h = automaticHarness(t, { inspect(message, reply, media) { finish = () => reply({ id: message.id, ok: true, data: media }); } });
+  h.network('https://cdn.test/old.m3u8'); await waitUntil(() => finish);
+  h.callbacks.onCommitted({ tabId: 1, frameId: 0, documentId: 'new-document', url: 'https://example.com/video' });
+  finish(); await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(h.sent.some(item => item.action === 'cancelInspection'), true);
+  assert.equal(h.api.preparedSnapshot(1).count, 0);
+  assert.notEqual(h.badges[1], '1');
+});
+
+test('a source change at the same URL prepares automatically and companion expiry removes readiness', async t => {
+  const page = { videoCount: 1, primaryVideoIndex: 0, sources: [{ url: 'https://cdn.test/a.mp4', videoIndex: 0 }] };
+  const h = automaticHarness(t, { page });
+  h.api.hintPreparation(1, true); await waitUntil(() => h.badges[1] === '1');
+  h.identity.value = 'second-video'; page.sources[0].url = 'https://cdn.test/b.mp4';
+  h.callbacks.external({ action: 'playerChanged' }, { id: 'test-extension', tab: { id: 1 }, frameId: 0 }, () => {});
+  await waitUntil(() => h.inspections() === 2 && h.api.preparedSnapshot(1).media?.token === 'ready-2');
+  assert.equal(h.badges[1], '1');
+  h.callbacks.message({ event: 'mediaExpired', token: 'ready-2' });
+  assert.equal(h.api.preparedSnapshot(1).count, 0);
+  h.callbacks.disconnect(); assert.notEqual(h.badges[1], '1');
+});
+
+test('automatic preparation shares an in-flight inspection with popup requests', async t => {
+  let finish;
+  const h = automaticHarness(t, { inspect(message, reply, media) { finish = () => reply({ id: message.id, ok: true, data: media }); } });
+  h.network('https://cdn.test/movie.m3u8'); await waitUntil(() => finish);
+  const a = h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video' });
+  const b = h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video' });
+  finish(); assert.equal((await a).token, (await b).token); assert.equal(h.inspections(), 1);
+});
+
+test('persistent pause suppresses background inspection, and failures never enable automatic MSE recording', async t => {
+  const paused = automaticHarness(t, { preferences: { capturePaused: true } });
+  paused.network('https://cdn.test/movie.m3u8'); await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(paused.sent.length, 0);
+  const scripts = [];
+  const h = automaticHarness(t, { page: { hasBlob: true, videoCount: 1 }, executeScript: async script => { scripts.push(script); },
+    inspect(message, reply) { queueMicrotask(() => reply({ id: message.id, ok: false, error: 'Unsupported URL' })); } });
+  h.api.hintPreparation(1, true); await waitUntil(() => h.badges[1] === '!');
+  assert.equal(scripts.some(script => script.args?.[0] === 'enableMSE'), false);
+});
+
+test('worker restart clears persisted ready badges instead of restoring unusable native tokens', async t => {
+  const h = automaticHarness(t, { session: { preparations: { 7: { status: 'ready', count: 1, media: { token: 'dead-host-token', options: [{ id: '720' }] } } } } });
+  await tick(); await tick();
+  assert.equal(h.badges[7], '');
+  assert.equal(h.api.preparedSnapshot(7).count, 0);
+  assert.deepEqual(h.stored.preparations, {});
+});
+
+test('cancelled native requests retain their slot until the host responds', async () => {
+  const h = harness(); await bootstrap(h);
+  const first = h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video' });
+  const second = h.api.handle({ action: 'analyze', tabId: 2, url: 'https://example.com/video' });
+  const rejected = assert.rejects(first, /abort/i);
+  await tick();
+  const inspections = h.sent.filter(message => message.action === 'inspect');
+  h.api.resetPreparation(1);
+  const third = h.api.handle({ action: 'analyze', tabId: 3, url: 'https://example.com/video' });
+  await tick();
+  assert.equal(h.sent.filter(message => message.action === 'inspect').length, 2);
+  h.respond(inspections[0], { token: 'cancelled-result' }); await rejected; await tick();
+  assert.equal(h.sent.filter(message => message.action === 'inspect').length, 3);
+  h.respond(inspections[1], { token: 'second' });
+  h.respond(h.sent.at(-1), { token: 'third' });
+  await second; await third;
+  assert.equal(h.api.preparedSnapshot(1).count, 0);
 });

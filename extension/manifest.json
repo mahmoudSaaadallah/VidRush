@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "VidRush — Video Downloader",
-  "version": "0.3.7",
+  "version": "0.4.0",
   "description": "Choose a video quality and download with your local yt-dlp companion.",
   "minimum_chrome_version": "120",
   "permissions": [
@@ -9,7 +9,8 @@
     "scripting",
     "webRequest",
     "nativeMessaging",
-    "storage"
+    "storage",
+    "webNavigation"
   ],
   "host_permissions": [
     "http://*/*",
@@ -34,5 +35,18 @@
     "48": "icons/48.png",
     "128": "icons/128.png"
   },
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqyVPLWZdOgj3xG8uq3ymw/1TZ9uT6QbffGU1PMbyFXZVegz0b/miqWuwBd3XtpzC/FTFoSFNyDm9TTbMbLi0AAjva8ary01zI+KLBBpw4l3cTmubO/ib6CgUH/Vayp/MjAWxGkhQPeLPsFluIcUFl5j36VpOL5JzjbGWG/YyJMpf4G4dAWJ3wbi/e3obfFAarsoMu6gKUhMLaMimaHjDCQM7z5fq5emEQ9mSV6wjtbxPxXTVVC8m6wKM+gxrryc4njBew/8p6zHJj4bExtmX7u3UVlqwJBpacZUe0QJwAIWTcxyUP4V9JfkOnxUXWuygMLMkXaWMLSuFcqUMtclvnQIDAQAB"
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqyVPLWZdOgj3xG8uq3ymw/1TZ9uT6QbffGU1PMbyFXZVegz0b/miqWuwBd3XtpzC/FTFoSFNyDm9TTbMbLi0AAjva8ary01zI+KLBBpw4l3cTmubO/ib6CgUH/Vayp/MjAWxGkhQPeLPsFluIcUFl5j36VpOL5JzjbGWG/YyJMpf4G4dAWJ3wbi/e3obfFAarsoMu6gKUhMLaMimaHjDCQM7z5fq5emEQ9mSV6wjtbxPxXTVVC8m6wKM+gxrryc4njBew/8p6zHJj4bExtmX7u3UVlqwJBpacZUe0QJwAIWTcxyUP4V9JfkOnxUXWuygMLMkXaWMLSuFcqUMtclvnQIDAQAB",
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "player-observer.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ]
 }
