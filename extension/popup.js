@@ -57,6 +57,10 @@ function renderDestination(value) {
   $('choose-folder').textContent = destination.choosingFolder ? 'مفتوح…' : 'تغيير';
   $('destination').setAttribute('aria-busy', String(destination.choosingFolder));
   $('download').disabled = !connected || !media || destination.choosingFolder;
+  if (!media) {
+    const downloadSpan = $('download')?.querySelector('span');
+    if (downloadSpan) text(downloadSpan, 'تحميل الفيديو');
+  }
 }
 
 async function call(action, data = {}) {
@@ -93,6 +97,9 @@ function updateQuality() {
   const fps = selected.fps || Number(selected.label.match(/(\d+) fps/)?.[1]);
   const details = [container, fps ? fps + ' fps' : '', selected.bytes ? '≈ ' + bytes(selected.bytes) : ''].filter(Boolean);
   text($('quality-details'), details.join(' · ') || selected.label);
+  const title = qualityTitle(selected);
+  const downloadSpan = $('download')?.querySelector('span');
+  if (downloadSpan) text(downloadSpan, title ? 'تحميل الفيديو (' + title + ')' : 'تحميل الفيديو');
 }
 
 function renderQualities() {
@@ -330,7 +337,7 @@ async function initialize() {
     $('folder').disabled = !folderFeatures;
     $('refresh').disabled = false;
     $('setup').hidden = true;
-    text($('version'), 'yt-dlp ' + companion.version);
+    text($('version'), companion.version ? 'v' + companion.version : '');
     renderDestination({ downloadDir: companion.downloadDir, choosingFolder: !!companion.choosingFolder });
     renderJobs(jobs);
     await analyze();
