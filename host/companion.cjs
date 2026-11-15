@@ -154,20 +154,28 @@ class Companion {
         const headers = sourceArgs(message.referer, context);
         this.inspections++;
         try {
+        let info;
+        if (audioUrl) {
+          const audioHeaders = sourceArgs(message.audioReferer || message.referer, context);
+          const [raw, audioRaw] = await Promise.all([
+            this.run([...baseArgs(this.config), ...headers, '--skip-download', '--dump-single-json', '--', url]),
+            this.run([...baseArgs(this.config), ...audioHeaders, '--skip-download', '--dump-single-json', '--', audioUrl]),
+          ]);
+          info = JSON.parse(raw);
+          if (info.entries?.length === 1 && info.entries[0]?.formats) info = info.entries[0];
+          let audioInfo = JSON.parse(audioRaw);
+          if (audioInfo.entries?.length === 1 && audioInfo.entries[0]?.formats) audioInfo = audioInfo.entries[0];
+          await Promise.all([
+            this.resolveAmbiguousTracks(info, { ...context, referer: message.referer }),
+            this.resolveAmbiguousTracks(audioInfo, { ...context, referer: message.audioReferer || message.referer }),
+          ]);
+          info = mergePairedInfos(info, audioInfo, { referer: message.referer, audioReferer: message.audioReferer, title: message.title });
+        } else {
           const raw = await this.run([...baseArgs(this.config), ...headers, '--skip-download', '--dump-single-json', '--', url]);
-          let info = JSON.parse(raw);
-          // Generic extractors wrap a single embedded video in a playlist result.
-          // Do not expand real playlists, unresolved entries, or multiple videos.
+          info = JSON.parse(raw);
           if (info.entries?.length === 1 && info.entries[0]?.formats) info = info.entries[0];
           await this.resolveAmbiguousTracks(info, { ...context, referer: message.referer });
-          if (audioUrl) {
-            const audioHeaders = sourceArgs(message.audioReferer || message.referer, context);
-            const audioRaw = await this.run([...baseArgs(this.config), ...audioHeaders, '--skip-download', '--dump-single-json', '--', audioUrl]);
-            let audioInfo = JSON.parse(audioRaw);
-            if (audioInfo.entries?.length === 1 && audioInfo.entries[0]?.formats) audioInfo = audioInfo.entries[0];
-            await this.resolveAmbiguousTracks(audioInfo, { ...context, referer: message.audioReferer || message.referer });
-            info = mergePairedInfos(info, audioInfo, { referer: message.referer, audioReferer: message.audioReferer, title: message.title });
-          }
+        }
           const media = buildMedia(info, !!this.config.ffmpegPath);
           if (message.referer && typeof message.title === 'string' && message.title.trim()) media.title = message.title.trim().slice(0, 300);
           this.media.set(media.token, { ...media, url, referer: message.referer, context, pairedInfo: audioUrl ? info : null });

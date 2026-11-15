@@ -691,8 +691,6 @@ test('automatic background media sniffer updates badge and pre-arms analysis', a
 
   const operation = h.api.handle({ action: 'analyze', tabId: 3, url: 'https://example.com/video' });
   await tick();
-  h.callbacks.message({ id: h.sent.at(-1).id, ok: false, error: 'Unsupported URL' });
-  await tick();
   assert.equal(h.sent.at(-1).url, network.url);
   h.respond(h.sent.at(-1), { token: 'auto-sniffed-token', options: [] });
   const media = await operation;
@@ -700,4 +698,41 @@ test('automatic background media sniffer updates badge and pre-arms analysis', a
 
   h.callbacks.tabUpdated(3, { url: 'https://other-site.test/' });
   assert.equal(h.badges[3], '');
+});
+
+test('early pairing immediately combines video and audio candidates without checking remaining sources', async () => {
+  const sources = [
+    { url: 'https://cdn.example.test/v-stream.mp4' },
+    { url: 'https://cdn.example.test/a-stream.mp4' },
+    { url: 'https://cdn.example.test/extra-1.mp4' },
+    { url: 'https://cdn.example.test/extra-2.mp4' },
+  ];
+  const h = harness([], { page: { sources } });
+  await bootstrap(h);
+
+  const operation = h.api.handle({ action: 'analyze', tabId: 1, url: 'https://example.com/video', scanPlayer: true });
+  await tick();
+  // First candidate: video track only
+  assert.equal(h.sent.at(-1).url, sources[0].url);
+  h.callbacks.message({ id: h.sent.at(-1).id, ok: false, code: 'MISSING_MEDIA_TRACKS', hasVideo: true, hasAudio: false });
+
+  await tick();
+  // Second candidate: audio track only
+  assert.equal(h.sent.at(-1).url, sources[1].url);
+  h.callbacks.message({ id: h.sent.at(-1).id, ok: false, code: 'MISSING_MEDIA_TRACKS', hasVideo: false, hasAudio: true });
+
+  await tick();
+  // Should immediately pair candidate 0 and 1 without inspecting candidate 2 or 3!
+  assert.equal(h.sent.at(-1).url, sources[0].url);
+  assert.equal(h.sent.at(-1).audioUrl, sources[1].url);
+  h.respond(h.sent.at(-1), { token: 'early-paired-token', options: [] });
+
+  const media = await operation;
+  assert.equal(media.token, 'early-paired-token');
+  assert.equal(media.detectedSources[0].label.includes('بث مدمج'), true);
+
+  // Verify sources[2] and sources[3] were never sent
+  const inspectedUrls = h.sent.map(m => m.url);
+  assert.equal(inspectedUrls.includes(sources[2].url), false);
+  assert.equal(inspectedUrls.includes(sources[3].url), false);
 });

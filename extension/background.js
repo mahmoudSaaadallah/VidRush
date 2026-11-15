@@ -79,7 +79,8 @@ chrome.tabs.onUpdated.addListener((tabId, change) => {
 async function scanStatus(tabId) {
   const enabled = await chrome.permissions.contains({ origins: SCAN_ORIGINS });
   if (!enabled && capture.session) capture.stop();
-  return { enabled, active: enabled && capture.active(tabId), count: capture.active(tabId) ? capture.sources.size : 0 };
+  const count = capture.active(tabId) ? capture.sources.size : (capture.tabSources.get(tabId)?.size || 0);
+  return { enabled, active: enabled && capture.active(tabId), count };
 }
 
 function withSourceChoices(media, set, selected) {
@@ -244,7 +245,8 @@ function request(action, data = {}, timeout = 100000) {
 
 async function inspectTab(tabId, url, scanOnly = false, entry) {
   let originalError;
-  if (!scanOnly) {
+  const preCaptured = capture.read(tabId, url);
+  if (!scanOnly && preCaptured.length === 0) {
     const [main] = await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, func: discoverPageMedia, args: [true] }).catch(() => []);
     if (main?.result?.hasDrm) throw new Error(protectedVideoMessage);
     let media;
@@ -278,7 +280,7 @@ async function inspectTab(tabId, url, scanOnly = false, entry) {
   const snapshots = frames.flatMap(frame => frame.result?.hasDrm ? [] : (frame.result?.sources || []).map(source => ({ ...source, frameId: frame.frameId, documentId: frame.documentId, title: frame.result?.title || main.title })));
   const snapshotByUrl = new Map(snapshots.map(source => [source.url, source]));
   const embeds = frames.flatMap(frame => frame.result?.hasDrm ? [] : (frame.result?.embeds || []).map(source => ({ ...source, title: main.title, kind: 'embed' })));
-  const rank = source => /(?:brightcove\.net|wistia\.net)/i.test(source.url) ? 1 : source.kind === 'embed' ? 5 : (source.kind || mediaKind(source.url)) === 'hls' ? (/(?:master|playlist|manifest|main|index)/i.test(new URL(source.url).pathname) ? 0 : 2) : (source.kind || mediaKind(source.url)) === 'dash' ? 3 : 4;
+  const rank = source => source.isPlaying ? -1 : /(?:brightcove\.net|wistia\.net)/i.test(source.url) ? 1 : source.kind === 'embed' ? 5 : (source.kind || mediaKind(source.url)) === 'hls' ? (/(?:master|playlist|manifest|main|index)/i.test(new URL(source.url).pathname) ? 0 : 2) : (source.kind || mediaKind(source.url)) === 'dash' ? 3 : 4;
   const sources = [...captured.map(source => ({ ...snapshotByUrl.get(source.url), ...source, documentId: source.documentId || frames.find(frame => frame.frameId === source.frameId)?.documentId, title: frames.find(frame => frame.frameId === source.frameId)?.result?.title || main.title })), ...snapshots, ...embeds]
     .filter(source => !seen.has(source.url) && seen.add(source.url)).sort((a, b) => rank(a) - rank(b)).slice(0, 20);
   const set = { url, sources };
@@ -294,6 +296,28 @@ async function inspectTab(tabId, url, scanOnly = false, entry) {
     catch (error) {
       if (error.code === 'MISSING_MEDIA_TRACKS') {
         inspectedTracks.push({ index, source: sources[index], hasVideo: Boolean(error.hasVideo), hasAudio: Boolean(error.hasAudio) });
+        if (pairedStreams) {
+          const videoCandidate = inspectedTracks.find(item => item.hasVideo && !item.hasAudio);
+          const audioCandidate = inspectedTracks.find(item => item.hasAudio && !item.hasVideo);
+          if (videoCandidate && audioCandidate) {
+            const pairedSource = {
+              ...videoCandidate.source,
+              audioUrl: audioCandidate.source.url,
+              audioReferer: audioCandidate.source.referer || videoCandidate.source.referer,
+              kind: 'paired'
+            };
+            set.sources.unshift(pairedSource);
+            try {
+              media = await inspectSource(tabId, url, set, 0, entry);
+              if ((await chrome.tabs.get(tabId)).url !== url) throw new Error('تغيّرت الصفحة أثناء الفحص. اضغط تحديث على الفيديو الجديد.');
+              updateBadge(tabId, Math.max(1, set.sources.length));
+              return media;
+            } catch (pairError) {
+              if (pairError.code === 'DRM_PROTECTED') throw pairError;
+              if (!sourceError || pairError.code === 'MISSING_MEDIA_TRACKS' && !sourceError.code) sourceError = pairError;
+            }
+          }
+        }
       }
       if (!sourceError || error.code === 'DRM_PROTECTED' || error.code === 'MISSING_MEDIA_TRACKS' && !sourceError.code) sourceError = error;
       continue;
@@ -322,6 +346,22 @@ async function inspectTab(tabId, url, scanOnly = false, entry) {
         if (error.code === 'DRM_PROTECTED') throw error;
         if (!sourceError || error.code === 'MISSING_MEDIA_TRACKS' && !sourceError.code) sourceError = error;
       }
+    }
+  }
+  if (!originalError && !scanOnly && preCaptured.length > 0) {
+    try {
+      const [mainAgain] = await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, func: discoverPageMedia, args: [true] }).catch(() => []);
+      if (!mainAgain?.result?.hasDrm) {
+        const media = await request('inspect', { url });
+        if (media) {
+          if ((await chrome.tabs.get(tabId)).url !== url) throw new Error('تغيّرت الصفحة أثناء الفحص. اضغط تحديث على الفيديو الجديد.');
+          updateBadge(tabId, 1);
+          return media;
+        }
+      }
+    } catch (error) {
+      if (error.code === 'DRM_PROTECTED') throw error;
+      originalError = error;
     }
   }
   if (protectedFrames.size || sourceError?.code === 'DRM_PROTECTED') throw new Error(protectedVideoMessage);
