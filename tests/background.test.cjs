@@ -14,6 +14,7 @@ function harness(initialJobs = [], options = {}) {
     postMessage(message) { sent.push(message); },
   };
   const badges = {}, badgeColors = {};
+  const tabUrls = { 1: 'https://example.com/video' };
   const chrome = {
     action: {
       setBadgeText: ({ tabId, text }) => { badges[tabId] = text; },
@@ -25,7 +26,16 @@ function harness(initialJobs = [], options = {}) {
       connectNative: () => port, onMessage: { addListener(fn) { callbacks.external = fn; } },
     },
     storage: { session: { get: async () => ({ jobs: initialJobs }), set: async data => Object.assign(stored, JSON.parse(JSON.stringify(data))) } },
-    tabs: { get: async id => ({ id, url: 'https://example.com/video' }), onRemoved: { addListener(fn) { callbacks.tabRemoved = fn; } }, onUpdated: { addListener(fn) { callbacks.tabUpdated = fn; } } },
+    tabs: {
+      get: async id => ({ id, url: tabUrls[id] || 'https://example.com/video' }),
+      onRemoved: { addListener(fn) { callbacks.tabRemoved = fn; } },
+      onUpdated: { addListener(fn) {
+        callbacks.tabUpdated = (id, change) => {
+          if (change?.url) tabUrls[id] = change.url;
+          fn(id, change);
+        };
+      } }
+    },
     permissions: { contains: async () => options.full === true, onRemoved: { addListener(fn) { callbacks.revoked = fn; } } },
     webRequest: Object.fromEntries(['onBeforeRequest', 'onBeforeSendHeaders', 'onResponseStarted', 'onCompleted', 'onErrorOccurred'].map(name => [name, { addListener(fn) { callbacks[name] = fn; } }])),
     scripting: { executeScript: async script => {
@@ -33,9 +43,10 @@ function harness(initialJobs = [], options = {}) {
         const res = await options.executeScript(script, identity);
         if (res !== undefined) return res;
       }
+      const pageUrl = tabUrls[script.target?.tabId] || 'https://example.com/video';
       return script.func.name === 'snapshotPlayerIdentity'
         ? [{ frameId: script.target.frameIds?.[0] || 0, documentId: identity.documentId, result: identity.value }]
-        : [{ frameId: 0, result: { pageUrl: 'https://example.com/video', sources: [], playerOrigins: [], ...options.page } }, ...(options.frames || [])];
+        : [{ frameId: 0, result: { pageUrl, sources: [], playerOrigins: [], ...options.page } }, ...(options.frames || [])];
     } },
   };
   const context = vm.createContext({ chrome, setTimeout, clearTimeout, console, URL, crypto,
@@ -702,10 +713,8 @@ test('automatic background media sniffer updates badge and pre-arms analysis', a
   assert.equal(h.badgeColors[3], '#2563eb');
 
   const operation = h.api.handle({ action: 'analyze', tabId: 3, url: 'https://example.com/video' });
-  await tick();
-  if (h.sent.at(-1).action === 'cachedMedia') {
-    h.respond(h.sent.at(-1), { available: true });
-  }
+  while (h.sent.at(-1).action !== 'cachedMedia') await tick();
+  h.respond(h.sent.at(-1), { available: true });
   const media = await operation;
   assert.equal(media.token, 'auto-sniffed-token');
 
@@ -748,4 +757,35 @@ test('early pairing immediately combines video and audio candidates without chec
   const inspectedUrls = h.sent.map(m => m.url);
   assert.equal(inspectedUrls.includes(sources[2].url), false);
   assert.equal(inspectedUrls.includes(sources[3].url), false);
+});
+
+test('navigating to a candidate video URL (e.g. YouTube watch) automatically pre-arms in background and lights badge when ready', async () => {
+  const ytUrl = 'https://www.youtube.com/watch?v=testVideo123';
+  const h = harness([], { full: true });
+  await bootstrap(h);
+
+  // Tab navigates to YouTube video page without user clicking extension
+  h.callbacks.tabUpdated(1, { url: ytUrl });
+
+  // Badge must NOT appear prematurely
+  assert.equal(h.badges[1] || '', '');
+
+  // Background pre-arm starts automatically
+  await new Promise(resolve => setTimeout(resolve, 250));
+  await tick();
+
+  assert.equal(h.sent.at(-1).url, ytUrl);
+  h.respond(h.sent.at(-1), { token: 'yt-ready-token', options: [{ id: '1080', label: '1080p' }] });
+  await tick();
+
+  // Once ready, badge lights up on the toolbar icon
+  assert.equal(h.badges[1], '1');
+  assert.equal(h.badgeColors[1], '#2563eb');
+
+  // When user opens popup after 5 minutes, response is instant from memory!
+  const operation = h.api.handle({ action: 'analyze', tabId: 1, url: ytUrl });
+  while (h.sent.at(-1).action !== 'cachedMedia') await tick();
+  h.respond(h.sent.at(-1), { available: true });
+  const media = await operation;
+  assert.equal(media.token, 'yt-ready-token');
 });
