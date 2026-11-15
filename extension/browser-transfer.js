@@ -14,7 +14,13 @@ async function browserFrameFile(action, options) {
   // A player can expose a URL-like currentSrc object whose string conversion is
   // meaningful only inside the page. Preserve it for fetch; never export it.
   const currentSource = () => getVideo()?.currentSrc || url;
-  const rangeTotal = response => Number(response.headers.get('content-range')?.match(/\/(\d+)$/)?.[1] || response.headers.get('content-length'));
+  const readRange = response => {
+    const match = response.headers.get('content-range')?.match(/^bytes (\d+)-(\d+)\/(\d+)$/);
+    if (!match) return null;
+    const [start, end, size] = match.slice(1).map(Number);
+    return [start, end, size].every(Number.isSafeInteger) && start >= 0 && end >= start && end < size && size <= 2 ** 41
+      ? { start, end, size } : null;
+  };
 
   const ensureMSEHook = () => {
     if (typeof window === 'undefined' || window.__vidrush_mse_installed) return;
@@ -82,6 +88,9 @@ async function browserFrameFile(action, options) {
       if (candidates.length < 16) candidates.push({ handle, label, height });
     };
     add(currentSource());
+    // MSE/blob currentSrc values are not fetchable files. The inspected network
+    // source may still be an ordinary file, and belongs in the candidate list.
+    if (typeof currentSource() === 'string' && currentSource().startsWith('blob:')) add(url);
     // Read public player metadata without changing playback or cycling qualities.
     // This works across sites using the API, rather than matching website domains.
     try {
@@ -97,30 +106,45 @@ async function browserFrameFile(action, options) {
     for (const source of [...(video?.querySelectorAll?.('source') || [])].slice(0, 16)) {
       add(source.src, source.getAttribute('label') || source.getAttribute('data-quality') || '', Number(source.getAttribute('size') || source.getAttribute('res')) || 0);
     }
-    const probe = async candidate => {
+    const probe = async (candidate, full = false) => {
       const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 15000);
       let reader;
       try {
-      const response = await fetch(candidate.handle, { headers: { Range: 'bytes=0-1023' }, signal: controller.signal });
+      const response = await fetch(candidate.handle, { ...(full ? {} : { headers: { Range: 'bytes=0-1023' } }), signal: controller.signal });
       if (![200, 206].includes(response.status) || !response.body) throw new Error('The browser could not read the video file.');
       reader = response.body.getReader();
+      const range = readRange(response);
+      // Content-Length on a 206 response is the slice length, never the file
+      // length. Cross-origin servers sometimes hide Content-Range from scripts.
+      if (response.status === 206 && (!range || range.start !== 0 || full && range.end !== range.size - 1)) throw new Error('The browser could not verify the complete video file size.');
+      const bytes = response.status === 206 ? range.size : Number(response.headers.get('content-length'));
+      if (!Number.isSafeInteger(bytes) || bytes <= 0 || bytes > 2 ** 41) throw new Error('No readable MP4/WebM file with a known size was found.');
       let head = new Uint8Array();
       while (head.length < 16) {
         const chunk = await reader.read(); if (chunk.done) break;
         const joined = new Uint8Array(Math.min(32, head.length + chunk.value.length)); joined.set(head); joined.set(chunk.value.subarray(0, joined.length - head.length), head.length); head = joined;
       }
       const ext = String.fromCharCode(...head.subarray(4, 8)) === 'ftyp' ? 'mp4' : head[0] === 0x1a && head[1] === 0x45 && head[2] === 0xdf && head[3] === 0xa3 ? 'webm' : null;
-      const bytes = rangeTotal(response);
-      if (!ext || !Number.isSafeInteger(bytes) || bytes <= 0 || bytes > 2 ** 41) throw new Error('No readable MP4/WebM file with a known size was found.');
+      if (!ext) throw new Error('No readable MP4/WebM file with a known size was found.');
+      const ranged = !full && response.status === 206;
+      if (ranged) {
+        // A fixed bytestart/byteend URL may ignore the Range header. Verify a
+        // second offset before offering a quality that would fail mid-download.
+        await reader.cancel(); reader = null;
+        const tail = await fetch(candidate.handle, { headers: { Range: 'bytes=' + (bytes - 1) + '-' + (bytes - 1) }, signal: controller.signal });
+        const last = readRange(tail);
+        if (tail.body) { reader = tail.body.getReader(); await reader.cancel(); reader = null; }
+        if (tail.status !== 206 || !last || last.start !== bytes - 1 || last.end !== bytes - 1 || last.size !== bytes) throw new Error('The browser URL only exposes a fixed video fragment.');
+      }
       const label = typeof candidate.label === 'string' ? candidate.label.trim().slice(0, 60) : '';
       const advertised = Number(label.match(/\b(\d{2,5})p\b/i)?.[1]) || candidate.height;
       const height = advertised || (candidate.handle === currentSource() ? video?.videoHeight || 0 : 0);
-      return { handle: candidate.handle, metadata: { ext, bytes, label, height } };
+      return { handle: candidate.handle, ranged, metadata: { ext, bytes, label, height } };
       } finally { clearTimeout(timer); if (reader) void reader.cancel().catch(() => {}); controller.abort(); }
     };
     const entries = [];
     for (let start = 0; start < candidates.length; start += 4) {
-      const batch = await Promise.allSettled(candidates.slice(start, start + 4).map(probe));
+      const batch = await Promise.allSettled(candidates.slice(start, start + 4).map(candidate => probe(candidate).catch(() => probe(candidate, true))));
       entries.push(...batch.filter(result => result.status === 'fulfilled').map(result => result.value));
     }
     if (!entries.length && options.allowMSE) {
@@ -154,7 +178,7 @@ async function browserFrameFile(action, options) {
   if (!state) {
     const entry = window.__vidrush_browser_sources?.get(catalogId)?.[variantIndex];
     if (!entry || entry.metadata.bytes !== total) throw new Error('The browser quality selection expired. Refresh VidRush and choose the quality again.');
-    state = { controller: new AbortController(), offset: 0, remainder: new Uint8Array(), url, total, catalogId, variantIndex, handle: entry.handle };
+    state = { controller: new AbortController(), offset: 0, remainder: new Uint8Array(), url, total, catalogId, variantIndex, handle: entry.handle, ranged: entry.ranged };
     window[slot] = state;
   }
   if (state.url !== url || state.total !== total || state.catalogId !== catalogId || state.variantIndex !== variantIndex) throw new Error('The browser video selection changed.');
@@ -172,10 +196,11 @@ async function browserFrameFile(action, options) {
           }
         } else {
           if (!state.reader) {
-            const response = await fetch(state.handle, { headers: { Range: 'bytes=' + state.offset + '-' }, signal: state.controller.signal });
-            const range = response.headers.get('content-range')?.match(/^bytes (\d+)-(\d+)\/(\d+)$/);
-            if (![200, 206].includes(response.status) || !response.body || response.status === 200 && state.offset !== 0 || response.status === 206 && (!range || Number(range[1]) !== state.offset || Number(range[3]) !== total)) throw new Error('The browser returned an invalid video byte range.');
-            state.responseEnd = range ? Number(range[2]) + 1 : total;
+            const response = await fetch(state.handle, { ...(state.ranged ? { headers: { Range: 'bytes=' + state.offset + '-' } } : {}), signal: state.controller.signal });
+            const range = readRange(response);
+            const length = response.headers.get('content-length');
+            if (![200, 206].includes(response.status) || !response.body || response.status === 200 && (state.offset !== 0 || length !== null && Number(length) !== total) || response.status === 206 && (!range || range.start !== state.offset || range.size !== total)) throw new Error('The browser returned an invalid video byte range.');
+            state.responseEnd = range ? range.end + 1 : total;
             state.reader = response.body.getReader();
           }
           const next = await state.reader.read();
@@ -186,11 +211,13 @@ async function browserFrameFile(action, options) {
             break;
           }
           state.remainder = next.value;
+          if (state.offset + state.remainder.length > state.responseEnd) throw new Error('The browser video exceeded its declared range.');
           while (state.offset === 0 && state.remainder.length < 16) {
             const more = await state.reader.read();
             if (more.done) throw new Error('The browser video header was truncated.');
             const joined = new Uint8Array(state.remainder.length + more.value.length);
             joined.set(state.remainder); joined.set(more.value, state.remainder.length); state.remainder = joined;
+            if (state.offset + state.remainder.length > state.responseEnd) throw new Error('The browser video exceeded its declared range.');
           }
         }
       }

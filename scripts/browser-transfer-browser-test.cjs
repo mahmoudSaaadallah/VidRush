@@ -12,6 +12,19 @@ async function run(chromium, extensionPath) {
   const bytes = Buffer.alloc(300000, 7); Buffer.from('000000206674797069736f6d', 'hex').copy(bytes);
   const server = http.createServer((req, res) => {
     res.setHeader('Content-Type', 'text/html');
+    if (req.url.startsWith('/cors-')) {
+      const fixed = req.url.startsWith('/cors-fixed');
+      const range = req.headers.range?.match(/bytes=(\d+)-(\d*)/);
+      const start = fixed ? 0 : Number(range?.[1] || 0);
+      const end = fixed ? 1023 : range?.[2] ? Number(range[2]) : bytes.length - 1;
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Content-Type', 'video/mp4');
+      res.setHeader('Content-Length', end - start + 1);
+      // Deliberately omit Access-Control-Expose-Headers, like a CDN whose byte
+      // range is visible in DevTools but hidden from page JavaScript.
+      if (range || fixed) { res.statusCode = 206; res.setHeader('Content-Range', `bytes ${start}-${end}/${bytes.length}`); }
+      res.end(bytes.subarray(start, end + 1)); return;
+    }
     if (req.url === '/sw.js') {
       res.setHeader('Content-Type', 'application/javascript');
       res.end(`self.addEventListener('install',e=>self.skipWaiting());self.addEventListener('activate',e=>e.waitUntil(clients.claim()));self.addEventListener('fetch',e=>{if(new URL(e.request.url).hostname!=='browser-only.invalid')return;const level=Number(new URL(e.request.url).searchParams.get('quality')||360);const bytes=new Uint8Array(level===1080?350000:300000).fill(level===720?7:9);bytes.set([0,0,0,32,102,116,121,112,105,115,111,109]);if(level===1440)bytes.fill(0,0,32);const match=e.request.headers.get('range')?.match(/bytes=(\\d+)-(\\d*)/);const start=Number(match?.[1]||0),end=match?.[2]?Number(match[2]):bytes.length-1;e.respondWith(new Response(bytes.slice(start,end+1),{status:match?206:200,headers:{'Content-Type':'video/mp4','Content-Length':String(end-start+1),...(match?{'Content-Range':'bytes '+start+'-'+end+'/'+bytes.length}:{})}}));});`);
@@ -99,12 +112,30 @@ async function run(chromium, extensionPath) {
       delete window.jwplayer;
       const source = document.createElement('source'); source.src = 'https://browser-only.invalid/virtual.mp4?quality=720'; source.setAttribute('label', '720p'); document.querySelector('video').append(source);
     });
+    const cors = await worker.evaluate(async ({ tabId, port }) => {
+      const call = async (action, options) => (await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: browserFrameFile, args: [action, options] }))[0].result;
+      const options = { key: 'cors', url: `http://localhost:${port}/cors-hidden.mp4`, videoIndex: 99 };
+      const probe = await call('probe', options);
+      if (probe.error) return probe;
+      const parts = [];
+      for (let i = 0; i < 10; i++) {
+        const part = await call('read', { ...options, total: probe.bytes, catalogId: probe.catalogId, variantIndex: 0 });
+        if (part.error) return part;
+        parts.push(...part.chunks);
+        if (part.done) break;
+      }
+      const fixed = await call('probe', { ...options, key: 'fixed', url: `http://localhost:${port}/cors-fixed.mp4?bytestart=0&byteend=1023` });
+      return { bytes: probe.bytes, parts, fixed };
+    }, { tabId, port: server.address().port });
+    assert.equal(cors.error, undefined); assert.equal(cors.bytes, bytes.length);
+    assert.deepEqual(Buffer.concat(cors.parts.map(part => Buffer.from(part, 'base64'))), bytes);
+    assert.match(cors.fixed.error, /No readable MP4\/WebM/);
     const dom = await worker.evaluate(async ({ tabId }) => (await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: browserFrameFile, args: ['probe', { key: 'dom', url: 'https://display-only.invalid/video.mp4', videoIndex: 0 }] }))[0].result, { tabId });
     assert.equal(dom.variants.some(v => v.label === '720p'), true);
     await page.evaluate(() => Object.defineProperty(document.querySelector('video'), 'mediaKeys', { get: () => ({}) }));
     const drm = await worker.evaluate(async ({ tabId }) => (await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: browserFrameFile, args: ['probe', { key: 'drm', url: 'https://display-only.invalid/video.mp4', videoIndex: 0 }] }))[0].result, { tabId });
     assert.match(drm.error, /DRM/);
-    console.log('Browser fallback enumerated readable qualities, preserved advertised labels, pinned the requested non-current file byte-for-byte, cancelled cleanly and rejected DRM.');
+    console.log('Browser fallback passed: qualities, pinned bytes, cancellation, hidden cross-origin Content-Range recovery, fixed-fragment rejection and DRM.');
   } finally {
     if (context) await context.close(); await new Promise(resolve => server.close(resolve));
     const relative = path.relative(os.tmpdir(), root);
