@@ -22,6 +22,9 @@ const analyses = new Map();
 const sourceChoices = new Map();
 const browserSources = new Map();
 const browserJobs = new Map();
+const preArmTimers = new Map();
+let preArmRunning = false;
+
 function updateBadge(tabId, count = 0) {
   if (!Number.isInteger(tabId) || tabId <= 0 || !chrome.action?.setBadgeText) return;
   try {
@@ -36,15 +39,71 @@ function updateBadge(tabId, count = 0) {
   } catch {}
 }
 
+function clearPreArm(tabId) {
+  const timer = preArmTimers.get(tabId);
+  if (timer) {
+    clearTimeout(timer);
+    preArmTimers.delete(tabId);
+  }
+}
+
+function queuePreArm(tabId, delay = 150) {
+  if (!Number.isInteger(tabId) || tabId <= 0 || capturePaused) return;
+  clearPreArm(tabId);
+  const timer = setTimeout(() => {
+    preArmTimers.delete(tabId);
+    void preArmTab(tabId);
+  }, delay);
+  preArmTimers.set(tabId, timer);
+}
+
+async function preArmTab(tabId) {
+  if (preArmRunning || capturePaused) return;
+  let tab;
+  try { tab = await chrome.tabs.get(tabId); } catch { return; }
+  if (!tab?.url || !/^https?:\/\//i.test(tab.url)) return;
+  const current = analyses.get(tabId);
+  if (current?.url === tab.url && (current.media || current.promise)) {
+    if (current.media) {
+      const count = current.media.detectedSources?.length || current.media.options?.length || 1;
+      updateBadge(tabId, count);
+    }
+    return;
+  }
+  try {
+    const activeTabs = await chrome.tabs.query?.({ active: true, currentWindow: true }).catch(() => []);
+    if (activeTabs?.length && activeTabs[0]?.id && activeTabs[0].id !== tabId) return;
+  } catch {}
+
+  preArmRunning = true;
+  try {
+    const entry = startAnalysis(tabId, tab.url, currentEntry => inspectTab(tabId, tab.url, false, currentEntry));
+    const media = await entry.promise;
+    const latest = await chrome.tabs.get(tabId).catch(() => null);
+    if (latest?.url === tab.url && analyses.get(tabId) === entry) {
+      const count = media.detectedSources?.length || media.options?.length || 1;
+      updateBadge(tabId, count);
+    }
+  } catch {
+    if (analyses.get(tabId)?.url === tab.url) analyses.delete(tabId);
+    updateBadge(tabId, 0);
+  } finally {
+    preArmRunning = false;
+  }
+}
+
 const capture = new CaptureSession({
   save: value => { void chrome.storage.session.set({ captureSession: value }).catch(() => {}); },
   // Capture traffic is not player identity: advertisements and later byte ranges
   // must not discard successful results (or detach an in-flight inspection).
   changed: (tabId, reset) => {
     if (reset && !analyses.has(tabId)) sourceChoices.delete(tabId);
-    if (reset) updateBadge(tabId, 0);
+    if (reset) {
+      clearPreArm(tabId);
+      updateBadge(tabId, 0);
+    }
   },
-  onBadge: (tabId, count) => updateBadge(tabId, count),
+  onBadge: tabId => queuePreArm(tabId),
   autoSniff: true,
 });
 let jobs = [];
@@ -70,10 +129,21 @@ for (const event of [chrome.webRequest.onCompleted, chrome.webRequest.onErrorOcc
 chrome.permissions.onRemoved.addListener(() => { void chrome.permissions.contains({ origins: SCAN_ORIGINS }).then(granted => { if (!granted) capture.stop(); }); });
 chrome.tabs.onUpdated.addListener((tabId, change) => {
   if (!change.url) return;
+  clearPreArm(tabId);
   if (analyses.get(tabId)?.url !== change.url) { analyses.delete(tabId); sourceChoices.delete(tabId); }
   if (capture.session?.url !== change.url) capture.navigate(tabId, change.url);
   capture.clearTab(tabId);
   updateBadge(tabId, 0);
+});
+chrome.tabs.onActivated?.addListener(activeInfo => {
+  if (capturePaused || !Number.isInteger(activeInfo?.tabId)) return;
+  const entry = analyses.get(activeInfo.tabId);
+  if (entry?.media) {
+    const count = entry.media.detectedSources?.length || entry.media.options?.length || 1;
+    updateBadge(activeInfo.tabId, count);
+  } else if (capture.tabSources?.get(activeInfo.tabId)?.size) {
+    queuePreArm(activeInfo.tabId, 0);
+  }
 });
 
 async function scanStatus(tabId) {
@@ -428,7 +498,7 @@ async function inspectTab(tabId, url, scanOnly = false, entry) {
 async function handle(message) {
   await ready;
   if (['captureStatus', 'startCapture', 'stopCapture'].includes(message.action)) {
-    if (message.action === 'stopCapture') { capturePaused = true; capture.paused = true; capture.clearTab(message.tabId); await chrome.storage.session.set({ capturePaused }); capture.stop(); return scanStatus(message.tabId); }
+    if (message.action === 'stopCapture') { clearPreArm(message.tabId); capturePaused = true; capture.paused = true; capture.clearTab(message.tabId); await chrome.storage.session.set({ capturePaused }); capture.stop(); return scanStatus(message.tabId); }
     if (message.action === 'startCapture') {
       if (!Number.isInteger(message.tabId) || !(await scanStatus(message.tabId)).enabled) throw new Error('فعّل الفحص الشامل واسمح بالصلاحية أولًا.');
       const tab = await chrome.tabs.get(message.tabId);
@@ -534,4 +604,4 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   return true;
 });
 
-chrome.tabs.onRemoved.addListener(tabId => { analyses.delete(tabId); sourceChoices.delete(tabId); capture.clearTab(tabId); if (capture.active(tabId)) capture.stop(); });
+chrome.tabs.onRemoved.addListener(tabId => { clearPreArm(tabId); analyses.delete(tabId); sourceChoices.delete(tabId); capture.clearTab(tabId); if (capture.active(tabId)) capture.stop(); });

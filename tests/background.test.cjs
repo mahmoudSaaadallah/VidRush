@@ -686,13 +686,26 @@ test('automatic background media sniffer updates badge and pre-arms analysis', a
   h.callbacks.onResponseStarted({ ...network, statusCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'application/vnd.apple.mpegurl' }] });
   await tick();
 
+  // Badge must NOT appear prematurely before the stream is verified & ready
+  assert.equal(h.badges[3], undefined);
+
+  // Let background pre-arm fire
+  await new Promise(resolve => setTimeout(resolve, 200));
+  await tick();
+
+  assert.equal(h.sent.at(-1).url, network.url);
+  h.respond(h.sent.at(-1), { token: 'auto-sniffed-token', options: [] });
+  await tick();
+
+  // NOW that the media is ready inside the extension, the badge lights up!
   assert.equal(h.badges[3], '1');
   assert.equal(h.badgeColors[3], '#2563eb');
 
   const operation = h.api.handle({ action: 'analyze', tabId: 3, url: 'https://example.com/video' });
   await tick();
-  assert.equal(h.sent.at(-1).url, network.url);
-  h.respond(h.sent.at(-1), { token: 'auto-sniffed-token', options: [] });
+  if (h.sent.at(-1).action === 'cachedMedia') {
+    h.respond(h.sent.at(-1), { available: true });
+  }
   const media = await operation;
   assert.equal(media.token, 'auto-sniffed-token');
 
