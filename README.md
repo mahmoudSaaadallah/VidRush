@@ -207,7 +207,7 @@ Quality names come from the player's labels when available. For example, a movie
 
 Reel feeds preload neighbouring videos and request small pieces of their files. VidRush uses the current Reel permalink with yt-dlp's existing Facebook extractor; it does not treat those pieces as independent ready videos. A login or extraction error is shown instead of falling back to an unrelated prefetched clip. Private or login-required Reels can still fail because VidRush does not export your browser login.
 
-For the **0.4.3** interface update (pinned download bar and streamlined modern controls), get the updated project files, run **Update.cmd**, finish active downloads, and click **Reload** for VidRush at `chrome://extensions`. Confirm **v0.4.3** in the popup. Merging the PR alone does not activate the installed update.
+For the **0.4.4** modern interface styling update, get the updated project files, run **Update.cmd**, finish active downloads, and click **Reload** for VidRush at `chrome://extensions`. Confirm **v0.4.4** in the popup. Merging the PR alone does not activate the installed update.
 
 ## Supported websites and limits
 
@@ -228,7 +228,7 @@ Use VidRush for videos you own or have permission to download.
 
 ### Check which version is installed
 
-The bottom of the VidRush popup shows its installed extension version, for example **v0.4.3**, even if the companion is disconnected. Chrome also shows it on VidRush's card at `chrome://extensions`. The nearby version number belongs to the separate download engine.
+The bottom of the VidRush popup shows its installed extension version, for example **v0.4.4**, even if the companion is disconnected. Chrome also shows it on VidRush's card at `chrome://extensions`. The nearby version number belongs to the separate download engine.
 
 Every delivered update receives a higher extension version. Fixes use a patch bump (for example, 0.2.0 → 0.2.1); new features use a minor bump (0.2.1 → 0.3.0). Pull request checks reject an unchanged or lower version and mismatched project version files.
 
