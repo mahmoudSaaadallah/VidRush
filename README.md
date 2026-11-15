@@ -234,6 +234,8 @@ Every delivered update receives a higher extension version. Fixes use a patch bu
 
 Updating the source folder or merging a PR alone does not change the installed copy. Run **Update.cmd**, finish active downloads, then click **Reload** on VidRush at `chrome://extensions`. Reopen VidRush and check the displayed version to confirm the update was activated.
 
+**Still seeing an old version after Reload?** Open VidRush's **Details** at `chrome://extensions` and check **Loaded from**. Chrome may be using a different project clone. `Update.cmd` copies files to `%LOCALAPPDATA%\VidRush\extension`; it does not update other project clones. If Chrome points to a project folder, update that exact folder to the intended release or review branch, then reload. Check the version again before testing.
+
 ### Apply an update
 
 **For extension/companion code updates, including folder-button fixes:**
