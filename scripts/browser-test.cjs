@@ -30,7 +30,7 @@ async function main() {
     const id = extensionId(manifest.key);
     assert.equal(new URL(worker.url()).host, id);
     assert.deepEqual(await worker.evaluate(() => chrome.runtime.getManifest().permissions), ['activeTab', 'scripting', 'webRequest', 'nativeMessaging', 'storage']);
-    assert.equal(await worker.evaluate(() => chrome.runtime.getManifest().host_permissions), undefined);
+    assert.deepEqual(await worker.evaluate(() => chrome.runtime.getManifest().host_permissions), ['http://*/*', 'https://*/*']);
     console.log(`Real extension loaded: ${id}`);
     if (process.argv.includes('--native')) {
       const ping = await worker.evaluate(async () => request('ping', {}, 20000));
