@@ -26,7 +26,9 @@ function buildMedia(info, hasFfmpeg) {
   const audio = formats.filter(isAudio);
   const choices = new Map();
   for (const video of videos) {
-    const needsMerge = video.acodec === 'none' || video.audio_ext === 'none';
+    // FFprobe may have resolved a generic extractor's initially unknown codec.
+    // Its stale audio_ext='none' hint must not override a verified audio track.
+    const needsMerge = video.acodec === 'none' || (!video.acodec || video.acodec === 'unknown') && video.audio_ext === 'none';
     if (needsMerge && (!hasFfmpeg || !audio.length)) continue;
     const candidates = [...audio].sort((a, b) => {
       const preferred = video.ext === 'mp4' ? (['m4a', 'mp4', 'aac'].includes(b.ext) - ['m4a', 'mp4', 'aac'].includes(a.ext)) : Number(b.ext === 'webm') - Number(a.ext === 'webm');
