@@ -44,6 +44,8 @@ async function run(chromium, extensionPath, realNative = false) {
     }
     if (req.url.endsWith('.mp4')) { res.setHeader('Content-Type', 'video/mp4'); res.setHeader('Content-Length', payload.length); res.end(payload); return; }
     res.setHeader('Content-Type', 'text/html');
+    if (req.url === '/wrapper') { res.end('<title>Embedded player</title><iframe src="/embedded" width="640" height="360"></iframe>'); return; }
+    if (req.url === '/embedded') { res.end('<video controls src="/embedded.mp4"></video>'); return; }
     res.end(req.url.startsWith('/ad') ? '<title>Unrelated frame</title>' : '<title>Autonomous preparation</title><video controls preload="metadata" src="/first.mp4" style="width:640px;height:360px"></video><iframe id="ad" src="/ad" width="120" height="90"></iframe>');
   });
   try {
@@ -130,6 +132,14 @@ async function run(chromium, extensionPath, realNative = false) {
     }
     const stored = await worker.evaluate(() => chrome.storage.session.get('preparations'));
     assert.equal(JSON.stringify(stored).includes(base), false, 'Source URLs must not be persisted in preparation metadata.');
+    const beforeEmbed = inspectCount();
+    const wrapper = await context.newPage(); await wrapper.goto(base + '/wrapper');
+    const wrapperId = await worker.evaluate(async () => (await chrome.tabs.query({ active: true, currentWindow: true }))[0].id);
+    await waitFor(async () => await worker.evaluate(id => preparedSnapshot(id).count, wrapperId) === 1, 'embedded player preparation');
+    await wrapper.waitForTimeout(1200);
+    assert.equal(await worker.evaluate(id => preparedSnapshot(id).count, wrapperId), 1, 'The iframe wrapper must not count as a second video.');
+    assert.equal(inspectCount(), beforeEmbed + 1);
+    await wrapper.close();
     assert.deepEqual(errors, []);
     console.log(`${realNative ? 'Real yt-dlp + FFprobe' : 'Deterministic native fixture'}: closed-popup preparation, ready-only badges, cached reopening, two players, removal, SPA and same-URL reload passed.`);
   } finally {

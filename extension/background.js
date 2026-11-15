@@ -323,7 +323,13 @@ async function collectSources(tabId, url) {
   const captured = capture.read(tabId, url).filter(source => !protectedFrames.has(source.frameId));
   const snapshots = frames.flatMap(frame => frame.result?.hasDrm ? [] : (frame.result?.sources || []).map(source => ({ ...source, frameId: frame.frameId, documentId: frame.documentId, title: frame.result?.title || main.title })));
   const snapshotByUrl = new Map(snapshots.map(source => [source.url, source]));
-  const embeds = frames.flatMap(frame => frame.result?.hasDrm ? [] : (frame.result?.embeds || []).map(source => ({ ...source, title: main.title, kind: 'embed' })));
+  const embeds = frames.flatMap(frame => frame.result?.hasDrm ? [] : (frame.result?.embeds || []).map(source => {
+    // An iframe URL and the stream found inside it describe the same player.
+    // Bind both to the child's document instead of counting the wrapper again.
+    const child = frames.find(candidate => candidate.result?.pageUrl === source.url);
+    return { ...source, frameId: child?.frameId ?? frame.frameId, documentId: child?.documentId ?? frame.documentId,
+      videoIndex: child?.result?.videoCount ? child.result.primaryVideoIndex : undefined, title: main.title, kind: 'embed' };
+  }));
   const rank = source => Number.isInteger(source.videoIndex) ? -1 : /(?:brightcove\.net|wistia\.net)/i.test(source.url) ? 1 : source.kind === 'embed' ? 5 : (source.kind || mediaKind(source.url)) === 'hls' ? (/(?:master|playlist|manifest|main|index)/i.test(new URL(source.url).pathname) ? 0 : 2) : (source.kind || mediaKind(source.url)) === 'dash' ? 3 : 4;
   const sources = [...captured.map(source => ({ ...snapshotByUrl.get(source.url), ...source, documentId: source.documentId || frames.find(frame => frame.frameId === source.frameId)?.documentId, title: frames.find(frame => frame.frameId === source.frameId)?.result?.title || main.title })), ...snapshots, ...embeds]
     .filter(source => !seen.has(source.url) && seen.add(source.url)).sort((a, b) => rank(a) - rank(b)).slice(0, 20);
