@@ -22,9 +22,6 @@ const analyses = new Map();
 const sourceChoices = new Map();
 const browserSources = new Map();
 const browserJobs = new Map();
-const preArmTimers = new Map();
-let preArmRunning = false;
-
 function updateBadge(tabId, count = 0) {
   if (!Number.isInteger(tabId) || tabId <= 0 || !chrome.action?.setBadgeText) return;
   try {
@@ -39,107 +36,15 @@ function updateBadge(tabId, count = 0) {
   } catch {}
 }
 
-function clearPreArm(tabId) {
-  const timer = preArmTimers.get(tabId);
-  if (timer) {
-    clearTimeout(timer);
-    preArmTimers.delete(tabId);
-  }
-}
-
-function isCandidateVideoUrl(url) {
-  if (!url || typeof url !== 'string' || !/^https?:\/\//i.test(url)) return false;
-  try {
-    const parsed = new URL(url);
-    const host = parsed.hostname.toLowerCase();
-    const path = parsed.pathname.toLowerCase();
-    if (host.includes('youtube.com') || host.includes('youtu.be')) {
-      return path.startsWith('/watch') || path.startsWith('/shorts') || path.startsWith('/live') || host.includes('youtu.be');
-    }
-    if (host.includes('vimeo.com') || host.includes('dailymotion.com') || host.includes('tiktok.com') || host.includes('twitch.tv')) {
-      return true;
-    }
-    if (host.includes('facebook.com') || host.includes('fb.watch')) {
-      return path.includes('/watch') || path.includes('/videos') || path.includes('/reel');
-    }
-    if (host.includes('instagram.com')) {
-      return path.startsWith('/reel') || path.startsWith('/p/') || path.startsWith('/tv/');
-    }
-    if (host.includes('twitter.com') || host === 'x.com') {
-      return path.includes('/status/');
-    }
-    if (/\.(?:mp4|webm|m3u8|mpd|mov|m4v)(?:$|[?#])/i.test(path)) {
-      return true;
-    }
-  } catch {}
-  return false;
-}
-
-function queuePreArm(tabId, expectedUrl, delay = 150) {
-  if (!Number.isInteger(tabId) || tabId <= 0 || capturePaused) return;
-  clearPreArm(tabId);
-  const timer = setTimeout(() => {
-    preArmTimers.delete(tabId);
-    void preArmTab(tabId, expectedUrl);
-  }, delay);
-  preArmTimers.set(tabId, timer);
-}
-
-async function preArmTab(tabId, expectedUrl) {
-  if (preArmRunning || capturePaused) return;
-  let tab;
-  try { tab = await chrome.tabs.get(tabId); } catch { return; }
-  const url = expectedUrl || tab?.url;
-  if (!url || !/^https?:\/\//i.test(url)) return;
-  const current = analyses.get(tabId);
-  if (current?.url === url && (current.media || current.promise)) {
-    if (current.media) {
-      const count = current.media.detectedSources?.length || current.media.options?.length || 1;
-      updateBadge(tabId, count);
-    }
-    return;
-  }
-  try {
-    const activeTabs = await chrome.tabs.query?.({ active: true, currentWindow: true }).catch(() => []);
-    if (activeTabs?.length && activeTabs[0]?.id && activeTabs[0].id !== tabId) return;
-  } catch {}
-
-  preArmRunning = true;
-  try {
-    const entry = startAnalysis(tabId, url, currentEntry => inspectTab(tabId, url, false, currentEntry));
-    const media = await entry.promise;
-    const latest = await chrome.tabs.get(tabId).catch(() => null);
-    const finalUrl = expectedUrl || latest?.url;
-    if (finalUrl === url && analyses.get(tabId) === entry) {
-      const count = media.detectedSources?.length || media.options?.length || 1;
-      updateBadge(tabId, count);
-    }
-  } catch {
-    if (analyses.get(tabId)?.url === url) analyses.delete(tabId);
-    updateBadge(tabId, 0);
-  } finally {
-    preArmRunning = false;
-  }
-}
-
 const capture = new CaptureSession({
   save: value => { void chrome.storage.session.set({ captureSession: value }).catch(() => {}); },
   // Capture traffic is not player identity: advertisements and later byte ranges
   // must not discard successful results (or detach an in-flight inspection).
   changed: (tabId, reset) => {
     if (reset && !analyses.has(tabId)) sourceChoices.delete(tabId);
-    if (reset) {
-      clearPreArm(tabId);
-      updateBadge(tabId, 0);
-    }
+    if (reset) updateBadge(tabId, 0);
   },
-  onBadge: (tabId, count) => {
-    if (count > 0 || capture.tabSources.get(tabId)?.size) {
-      queuePreArm(tabId);
-    } else {
-      clearPreArm(tabId);
-    }
-  },
+  onBadge: (tabId, count) => updateBadge(tabId, count),
   autoSniff: true,
 });
 let jobs = [];
@@ -164,47 +69,17 @@ chrome.webRequest.onResponseStarted.addListener(details => { void ready.then(() 
 for (const event of [chrome.webRequest.onCompleted, chrome.webRequest.onErrorOccurred]) event.addListener(details => { void ready.then(() => capture.done(details)); }, observedUrls);
 chrome.permissions.onRemoved.addListener(() => { void chrome.permissions.contains({ origins: SCAN_ORIGINS }).then(granted => { if (!granted) capture.stop(); }); });
 chrome.tabs.onUpdated.addListener((tabId, change) => {
-  if (change.url) {
-    clearPreArm(tabId);
-    if (analyses.get(tabId)?.url !== change.url) { analyses.delete(tabId); sourceChoices.delete(tabId); }
-    if (capture.session?.url !== change.url) capture.navigate(tabId, change.url);
-    capture.clearTab(tabId);
-    updateBadge(tabId, 0);
-    if (isCandidateVideoUrl(change.url)) {
-      queuePreArm(tabId, change.url, 200);
-    }
-    return;
-  }
-  if (change.status === 'complete') {
-    void chrome.tabs.get(tabId).then(currentTab => {
-      if (currentTab?.url && isCandidateVideoUrl(currentTab.url)) {
-        queuePreArm(tabId, currentTab.url, 200);
-      }
-    }).catch(() => {});
-  }
-});
-chrome.tabs.onActivated?.addListener(activeInfo => {
-  if (capturePaused || !Number.isInteger(activeInfo?.tabId)) return;
-  const entry = analyses.get(activeInfo.tabId);
-  if (entry?.media) {
-    const count = entry.media.detectedSources?.length || entry.media.options?.length || 1;
-    updateBadge(activeInfo.tabId, count);
-  } else {
-    void chrome.tabs.get(activeInfo.tabId).then(tab => {
-      if (tab?.url && isCandidateVideoUrl(tab.url)) {
-        queuePreArm(activeInfo.tabId, tab.url, 100);
-      } else if (capture.tabSources?.get(activeInfo.tabId)?.size) {
-        queuePreArm(activeInfo.tabId, tab?.url, 100);
-      }
-    }).catch(() => {});
-  }
+  if (!change.url) return;
+  if (analyses.get(tabId)?.url !== change.url) { analyses.delete(tabId); sourceChoices.delete(tabId); }
+  if (capture.session?.url !== change.url) capture.navigate(tabId, change.url);
+  capture.clearTab(tabId);
+  updateBadge(tabId, 0);
 });
 
 async function scanStatus(tabId) {
   const enabled = await chrome.permissions.contains({ origins: SCAN_ORIGINS });
   if (!enabled && capture.session) capture.stop();
-  const count = capture.active(tabId) ? capture.sources.size : (capture.tabSources.get(tabId)?.size || 0);
-  return { enabled, active: enabled && capture.active(tabId), count };
+  return { enabled, active: enabled && capture.active(tabId), count: capture.active(tabId) ? capture.sources.size : 0 };
 }
 
 function withSourceChoices(media, set, selected) {
@@ -236,8 +111,7 @@ function startAnalysis(tabId, url, inspect) {
 }
 
 async function reuseAnalysis(entry) {
-  if (!analysisCache) return false;
-  if (entry.identity && entry.identity !== await readIdentity(entry.scope)) return false;
+  if (!analysisCache || !entry.identity || entry.identity !== await readIdentity(entry.scope)) return false;
   if (!(await request('cachedMedia', { token: entry.media.token })).available) return false;
   const source = browserSources.get(entry.media.token);
   if (entry.media.browser && !source) return false;
@@ -245,7 +119,7 @@ async function reuseAnalysis(entry) {
     const [frame] = await chrome.scripting.executeScript({ target: source.target, world: 'MAIN', func: browserFrameFile, args: ['available', { url: source.url, videoIndex: source.videoIndex, catalogId: source.catalogId }] });
     if (!frame?.result?.available) return false;
   }
-  return !entry.identity || entry.identity === await readIdentity(entry.scope);
+  return entry.identity === await readIdentity(entry.scope);
 }
 
 async function inspectSource(tabId, url, set, index, entry) {
@@ -370,8 +244,7 @@ function request(action, data = {}, timeout = 100000) {
 
 async function inspectTab(tabId, url, scanOnly = false, entry) {
   let originalError;
-  const preCaptured = capture.read(tabId, url);
-  if (!scanOnly && preCaptured.length === 0) {
+  if (!scanOnly) {
     const [main] = await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, func: discoverPageMedia, args: [true] }).catch(() => []);
     if (main?.result?.hasDrm) throw new Error(protectedVideoMessage);
     let media;
@@ -405,7 +278,7 @@ async function inspectTab(tabId, url, scanOnly = false, entry) {
   const snapshots = frames.flatMap(frame => frame.result?.hasDrm ? [] : (frame.result?.sources || []).map(source => ({ ...source, frameId: frame.frameId, documentId: frame.documentId, title: frame.result?.title || main.title })));
   const snapshotByUrl = new Map(snapshots.map(source => [source.url, source]));
   const embeds = frames.flatMap(frame => frame.result?.hasDrm ? [] : (frame.result?.embeds || []).map(source => ({ ...source, title: main.title, kind: 'embed' })));
-  const rank = source => source.isPlaying ? -1 : /(?:brightcove\.net|wistia\.net)/i.test(source.url) ? 1 : source.kind === 'embed' ? 5 : (source.kind || mediaKind(source.url)) === 'hls' ? (/(?:master|playlist|manifest|main|index)/i.test(new URL(source.url).pathname) ? 0 : 2) : (source.kind || mediaKind(source.url)) === 'dash' ? 3 : 4;
+  const rank = source => /(?:brightcove\.net|wistia\.net)/i.test(source.url) ? 1 : source.kind === 'embed' ? 5 : (source.kind || mediaKind(source.url)) === 'hls' ? (/(?:master|playlist|manifest|main|index)/i.test(new URL(source.url).pathname) ? 0 : 2) : (source.kind || mediaKind(source.url)) === 'dash' ? 3 : 4;
   const sources = [...captured.map(source => ({ ...snapshotByUrl.get(source.url), ...source, documentId: source.documentId || frames.find(frame => frame.frameId === source.frameId)?.documentId, title: frames.find(frame => frame.frameId === source.frameId)?.result?.title || main.title })), ...snapshots, ...embeds]
     .filter(source => !seen.has(source.url) && seen.add(source.url)).sort((a, b) => rank(a) - rank(b)).slice(0, 20);
   const set = { url, sources };
@@ -421,28 +294,6 @@ async function inspectTab(tabId, url, scanOnly = false, entry) {
     catch (error) {
       if (error.code === 'MISSING_MEDIA_TRACKS') {
         inspectedTracks.push({ index, source: sources[index], hasVideo: Boolean(error.hasVideo), hasAudio: Boolean(error.hasAudio) });
-        if (pairedStreams) {
-          const videoCandidate = inspectedTracks.find(item => item.hasVideo && !item.hasAudio);
-          const audioCandidate = inspectedTracks.find(item => item.hasAudio && !item.hasVideo);
-          if (videoCandidate && audioCandidate) {
-            const pairedSource = {
-              ...videoCandidate.source,
-              audioUrl: audioCandidate.source.url,
-              audioReferer: audioCandidate.source.referer || videoCandidate.source.referer,
-              kind: 'paired'
-            };
-            set.sources.unshift(pairedSource);
-            try {
-              media = await inspectSource(tabId, url, set, 0, entry);
-              if ((await chrome.tabs.get(tabId)).url !== url) throw new Error('تغيّرت الصفحة أثناء الفحص. اضغط تحديث على الفيديو الجديد.');
-              updateBadge(tabId, Math.max(1, set.sources.length));
-              return media;
-            } catch (pairError) {
-              if (pairError.code === 'DRM_PROTECTED') throw pairError;
-              if (!sourceError || pairError.code === 'MISSING_MEDIA_TRACKS' && !sourceError.code) sourceError = pairError;
-            }
-          }
-        }
       }
       if (!sourceError || error.code === 'DRM_PROTECTED' || error.code === 'MISSING_MEDIA_TRACKS' && !sourceError.code) sourceError = error;
       continue;
@@ -471,22 +322,6 @@ async function inspectTab(tabId, url, scanOnly = false, entry) {
         if (error.code === 'DRM_PROTECTED') throw error;
         if (!sourceError || error.code === 'MISSING_MEDIA_TRACKS' && !sourceError.code) sourceError = error;
       }
-    }
-  }
-  if (!originalError && !scanOnly && preCaptured.length > 0) {
-    try {
-      const [mainAgain] = await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, func: discoverPageMedia, args: [true] }).catch(() => []);
-      if (!mainAgain?.result?.hasDrm) {
-        const media = await request('inspect', { url });
-        if (media) {
-          if ((await chrome.tabs.get(tabId)).url !== url) throw new Error('تغيّرت الصفحة أثناء الفحص. اضغط تحديث على الفيديو الجديد.');
-          updateBadge(tabId, 1);
-          return media;
-        }
-      }
-    } catch (error) {
-      if (error.code === 'DRM_PROTECTED') throw error;
-      originalError = error;
     }
   }
   if (protectedFrames.size || sourceError?.code === 'DRM_PROTECTED') throw new Error(protectedVideoMessage);
@@ -553,7 +388,7 @@ async function inspectTab(tabId, url, scanOnly = false, entry) {
 async function handle(message) {
   await ready;
   if (['captureStatus', 'startCapture', 'stopCapture'].includes(message.action)) {
-    if (message.action === 'stopCapture') { clearPreArm(message.tabId); capturePaused = true; capture.paused = true; capture.clearTab(message.tabId); await chrome.storage.session.set({ capturePaused }); capture.stop(); return scanStatus(message.tabId); }
+    if (message.action === 'stopCapture') { capturePaused = true; capture.paused = true; capture.clearTab(message.tabId); await chrome.storage.session.set({ capturePaused }); capture.stop(); return scanStatus(message.tabId); }
     if (message.action === 'startCapture') {
       if (!Number.isInteger(message.tabId) || !(await scanStatus(message.tabId)).enabled) throw new Error('فعّل الفحص الشامل واسمح بالصلاحية أولًا.');
       const tab = await chrome.tabs.get(message.tabId);
@@ -659,4 +494,4 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   return true;
 });
 
-chrome.tabs.onRemoved.addListener(tabId => { clearPreArm(tabId); analyses.delete(tabId); sourceChoices.delete(tabId); capture.clearTab(tabId); if (capture.active(tabId)) capture.stop(); });
+chrome.tabs.onRemoved.addListener(tabId => { analyses.delete(tabId); sourceChoices.delete(tabId); capture.clearTab(tabId); if (capture.active(tabId)) capture.stop(); });

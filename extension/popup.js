@@ -257,11 +257,7 @@ async function analyze(refresh = false, scanPlayer = false) {
   analyzing = true;
   $('refresh').disabled = !connected;
   $('refresh').setAttribute('aria-busy', 'true');
-  const status = await call('captureStatus', { tabId: activeTab.id }).catch(() => null);
-  const sniffedCount = status?.count || 0;
-  notice(sniffedCount > 0
-    ? `جارٍ فحص الفيديو والجودات المتاحة (${sniffedCount > 9 ? '9+' : sniffedCount} مكتشف)…`
-    : 'جارٍ فحص الفيديو والجودات المتاحة…');
+  notice('جارٍ فحص الفيديو والجودات المتاحة…');
   try {
     const selection = { tabId: activeTab.id, url: activeTab.url };
     let result;

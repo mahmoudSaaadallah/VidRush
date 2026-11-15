@@ -1,11 +1,10 @@
 {
   "manifest_version": 3,
   "name": "VidRush — Video Downloader",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "Choose a video quality and download with your local yt-dlp companion.",
   "minimum_chrome_version": "120",
   "permissions": [
-    "tabs",
     "activeTab",
     "scripting",
     "webRequest",

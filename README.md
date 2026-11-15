@@ -141,7 +141,7 @@ Changing the page URL, replacing the video element, changing its source/declared
 
 The cache keeps up to **eight recent tabs** in memory during the current companion connection. It is not a permanent download-link history and is not saved to disk. Closing a tab, restarting Chrome/the companion, or reloading the extension clears its usable selections. If a selection is evicted, a browser-only file catalogue disappears, or the player identity cannot be verified, VidRush safely analyzes again. Hidden changes inside a private player API may still require Refresh.
 
-Existing users can run **`Update.cmd`**, finish active downloads, and reload VidRush at `chrome://extensions`. Confirm **v0.3.5** in the footer. Updating adds the `tabs` permission to enable true automatic background video detection across tabs without needing manual clicks, pre-arming candidate video URLs (YouTube, Facebook, Vimeo, and sniffed streams) and lighting the badge only when ready for immediate 0-second downloads.
+Existing users can run **`Update.cmd`**, finish active downloads, and reload VidRush at `chrome://extensions`. Confirm **v0.3.6** in the footer. Restores the clean, stable baseline of PR #19 (v0.3.1) with passive background media stream sniffing and action badge indicators.
 
 ### Embedded players and signed-in lessons
 

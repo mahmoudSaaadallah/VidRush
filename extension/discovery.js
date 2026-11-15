@@ -36,7 +36,7 @@ function discoverPageMedia(protectionOnly = false) {
   if (protectionOnly) return { hasDrm };
   const hasBlob = videos.some(video => (video.currentSrc || video.src || '').startsWith('blob:'));
   const embeds = [];
-  function add(value, mediaElement = false, videoIndex, isPlaying = false) {
+  function add(value, mediaElement = false, videoIndex) {
     if (typeof value !== 'string' || !value || value.length > 8192 || sources.size >= 20) return;
     let url;
     try { url = new URL(value, document.baseURI); } catch { return; }
@@ -49,17 +49,16 @@ function discoverPageMedia(protectionOnly = false) {
     }
     url.hash = '';
     const referer = url.origin === page.origin ? page.href.split('#')[0] : page.origin + '/';
-    sources.set(url.href, { ...sources.get(url.href), url: url.href, referer, ...(Number.isInteger(videoIndex) ? { videoIndex } : {}), ...(isPlaying ? { isPlaying: true } : {}) });
+    sources.set(url.href, { ...sources.get(url.href), url: url.href, referer, ...(Number.isInteger(videoIndex) ? { videoIndex } : {}) });
   }
   if (!hasDrm) {
     const mediaAttrs = ['src', 'data-src', 'data-url', 'data-stream-url', 'data-hls-url', 'data-hls', 'data-manifest', 'data-video-url', 'data-mpd'];
     for (const [index, video] of videos.entries()) {
-      const isPlaying = !video.paused && video.currentTime > 0;
-      add(video.currentSrc, true, index, isPlaying);
-      for (const attr of mediaAttrs) add(video.getAttribute?.(attr), true, index, isPlaying);
+      add(video.currentSrc, true, index);
+      for (const attr of mediaAttrs) add(video.getAttribute?.(attr), true, index);
       for (const source of (video.querySelectorAll?.('source') || [])) {
-        add(source.src, true, index, isPlaying);
-        for (const attr of mediaAttrs) add(source.getAttribute?.(attr), true, index, isPlaying);
+        add(source.src, true, index);
+        for (const attr of mediaAttrs) add(source.getAttribute?.(attr), true, index);
       }
     }
     // Check custom media players and universal embed containers
