@@ -401,6 +401,7 @@ async function main() {
     await require('./browser-transfer-browser-test.cjs').run(chromium, extensionPath);
     await require('./analysis-cache-browser-test.cjs').run(chromium, extensionPath);
     await require('./preparation-browser-test.cjs').run(chromium, extensionPath);
+    await require('./reels-browser-test.cjs').run(chromium, extensionPath);
   } finally {
     if (server) await new Promise(resolve => server.close(resolve));
     await context.close();

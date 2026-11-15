@@ -2,8 +2,11 @@
 
 // Serialized into the player's MAIN world. Read metadata only: no fetch, seeks,
 // quality changes, playback timestamps, or Resource Timing history.
-function snapshotPlayerIdentity(videoIndex) {
+function snapshotPlayerIdentity(videoIndex, pageOnly = false) {
   try {
+    // An extractor-resolved permalink identifies its video independently of
+    // recycled DOM players, changing blob handles and preloaded feed entries.
+    if (pageOnly) return JSON.stringify([location.href, ['page']]);
     const state = window.__vidrush_player_identity || (window.__vidrush_player_identity = { nodes: new WeakMap(), next: 0 });
     const id = node => {
       if (!state.nodes.has(node)) state.nodes.set(node, ++state.next);
