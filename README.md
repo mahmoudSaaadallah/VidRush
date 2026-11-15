@@ -194,7 +194,20 @@ For these downloads, **keep the video page and Chrome open until completion**. C
 
 VidRush checks up to 16 declared files from the video element's `<source>` entries and, when available, the public JW Player playlist API. It reads a small file header to include only readable MP4/WebM files with a known size. It does not switch playback to cycle through qualities. Every option is bound to its own file and size, so selecting 720p downloads that file even if the website is currently playing another quality.
 
+The browser fallback also checks that a partial-file URL can read a different byte offset before offering it as a quality. If a server hides its range information from Chrome scripts, VidRush tries a normal full-file request. A fixed fragment with an unverifiable full size is rejected during preparation, instead of being offered as a complete download.
+
 Quality names come from the player's labels when available. For example, a movie labelled **360p** may contain a cropped image only **272 pixels high**; VidRush keeps the player's 360p label instead of inventing a separate 272p quality. If the player supplies only one file and has no quality menu, VidRush offers only that file. If other files are hidden until the website switches quality, change it in the player and refresh VidRush. This is not universal quality enumeration: private player APIs, separate browser-only audio/video streams, and browser-only HLS/DASH reconstruction remain unsupported by this fallback.
+
+### Facebook Reels
+
+1. Open the Reel's own link, such as `https://www.facebook.com/reel/VIDEO_ID`. Automatic preparation must be enabled.
+2. Leave the VidRush popup closed while it prepares the available qualities. The badge becomes **1** when that Reel is ready.
+3. Open VidRush, choose a quality and download. yt-dlp resolves the Reel's matching picture and sound tracks, and FFmpeg merges them when needed.
+4. Moving to another Reel updates preparation when Facebook changes the address. Old choices are cleared while the new Reel is prepared. If the address still points to the previous Reel, open the current Reel's own link before downloading.
+
+Reel feeds preload neighbouring videos and request small pieces of their files. VidRush uses the current Reel permalink with yt-dlp's existing Facebook extractor; it does not treat those pieces as independent ready videos. A login or extraction error is shown instead of falling back to an unrelated prefetched clip. Private or login-required Reels can still fail because VidRush does not export your browser login.
+
+For the **0.4.2** fix, get the updated project files, run **Update.cmd**, finish active downloads, and click **Reload** for VidRush at `chrome://extensions`. Confirm **v0.4.2** in the popup, then refresh the Reel page. Merging the PR alone does not activate the installed update.
 
 ## Supported websites and limits
 
@@ -202,7 +215,7 @@ Support comes from yt-dlp's [supported sites](https://github.com/yt-dlp/yt-dlp/b
 
 - **DRM-protected videos are unsupported.**
 - Login-required, private, subscription, age-restricted, or anti-bot-protected videos may fail. This version does not import browser cookies or credentials.
-- VidRush first sends the **page URL** to yt-dlp. On failure, it scans permitted frames and can use media requests captured in the selected tab. There is no player-domain allowlist. Proprietary transports, inaccessible browser responses, expired links, and authentication restrictions can still prevent downloading.
+- Manual analysis normally sends the **page URL** to yt-dlp first, then scans permitted frames on failure. Automatic preparation can start from observed media sources. Facebook Reel permalinks always use the page extractor to avoid neighbouring clips and partial files. Generic player discovery does not need each player domain to be added individually. Proprietary transports, inaccessible browser responses, expired links, and authentication restrictions can still prevent downloading.
 - Playlists are not downloaded as a batch. Open the individual video's own page.
 - Live streams are outside the supported workflow for this version.
 - Downloads survive closing the popup, but **not closing Chrome, reloading the extension, restarting the companion, sleeping the PC indefinitely, or losing the process**. Reopen the page and retry if interrupted.
@@ -220,6 +233,8 @@ The bottom of the VidRush popup shows its installed extension version, for examp
 Every delivered update receives a higher extension version. Fixes use a patch bump (for example, 0.2.0 → 0.2.1); new features use a minor bump (0.2.1 → 0.3.0). Pull request checks reject an unchanged or lower version and mismatched project version files.
 
 Updating the source folder or merging a PR alone does not change the installed copy. Run **Update.cmd**, finish active downloads, then click **Reload** on VidRush at `chrome://extensions`. Reopen VidRush and check the displayed version to confirm the update was activated.
+
+**Still seeing an old version after Reload?** Open VidRush's **Details** at `chrome://extensions` and check **Loaded from**. Chrome may be using a different project clone. `Update.cmd` copies files to `%LOCALAPPDATA%\VidRush\extension`; it does not update other project clones. If Chrome points to a project folder, update that exact folder to the intended release or review branch, then reload. Check the version again before testing.
 
 ### Apply an update
 
@@ -272,6 +287,7 @@ If you customized `downloadDir` to point inside the companion installation folde
 | Unsupported URL on a lesson that plays in Chrome | Start playback, reopen VidRush, and use **Scan video player** if offered. Allow access to the named player site and reopen the popup if it closed. See [Embedded players and signed-in lessons](#embedded-players-and-signed-in-lessons). |
 | New/unknown player, missing scan button, or no source detected | Open **Comprehensive scan** beside the theme controls, enable it, then restart playback and refresh. Choose the correct detected source if several videos are present. |
 | Browser-file download stops when leaving a page | Keep the original video page open until the download completes. Reopen, play, and refresh the video before retrying. |
+| Facebook Reel says `The browser returned an invalid video byte range` | Activate v0.4.2 or newer using `Update.cmd` and Chrome's Reload button, refresh Facebook, and open the Reel's own link. VidRush uses yt-dlp's Reel formats instead of the feed's partial-file requests. |
 | Player scan finds no source, or a stream returns 403 | Reload the lesson, start playback, and retry. Signed URLs can expire; some streams also need cookies or DRM and remain unsupported. Never paste account credentials into VidRush. |
 | MP4 has sound only or picture only | Update VidRush and scan the page again. VidRush needs a source that provides both tracks. If it detects DRM, use the service's official playback options. |
 | Postprocessing failed or the source has no readable audio track | Start playback, refresh VidRush, and select another detected source if available. Some HLS renditions cannot supply both tracks. The downloaded file may remain in your save folder, but it is marked failed. |

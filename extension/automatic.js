@@ -115,7 +115,7 @@ async function prepareInBackground(tabId, signal) {
     const discovery = await collectSources(tabId, tab.url);
     current();
     discovery.set.sources = discovery.set.sources.filter(source => source.kind !== 'embed' || discovery.frames.some(frame => frame.result?.pageUrl === source.url && frame.result.videoCount));
-    const hasPlayer = discovery.frames.some(frame => frame.result?.videoCount || frame.result?.hasBlob);
+    const hasPlayer = discovery.pageOnly || discovery.frames.some(frame => frame.result?.videoCount || frame.result?.hasBlob);
     if (!discovery.set.sources.length && !hasPlayer) { setPreparationStatus(tabId, 'waiting'); return; }
     const companion = await ensureCompanion(true);
     current();
@@ -143,7 +143,7 @@ async function prepareInBackground(tabId, signal) {
       current();
       if (group === 'page' && state.records.size) continue;
       const source = sources[0];
-      const scope = { target: { tabId, ...(source?.documentId ? { documentIds: [source.documentId] } : { frameIds: [source?.frameId || 0] }) }, videoIndex: source?.videoIndex };
+      const scope = { target: { tabId, ...(source?.documentId ? { documentIds: [source.documentId] } : { frameIds: [source?.frameId || 0] }) }, videoIndex: source?.videoIndex, pageOnly: discovery.pageOnly };
       const identity = await readIdentity(scope);
       current();
       if (identity && state.records.has(identity)) continue;

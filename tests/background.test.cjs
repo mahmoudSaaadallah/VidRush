@@ -855,3 +855,58 @@ test('cancelled native requests retain their slot until the host responds', asyn
   await second; await third;
   assert.equal(h.api.preparedSnapshot(1).count, 0);
 });
+
+test('Reels prepare the current permalink before fragments, follow SPA navigation and reuse ready qualities', async t => {
+  let url = 'https://www.facebook.com/reel/1886118695736589';
+  const h = automaticHarness(t, {
+    executeScript: async script => [{ frameId: 0, documentId: 'main-document', result: script.func?.name === 'snapshotPlayerIdentity'
+      ? url + (script.args[1] ? ':page' : ':player')
+      : { pageUrl: url, videoCount: 3, hasBlob: true, primaryVideoIndex: 1, sources: [
+        { url: 'https://cdn.test/old.mp4?bytestart=0&byteend=1023', videoIndex: 0 },
+        { url: 'https://cdn.test/next.mp4?bytestart=0&byteend=1023', videoIndex: 2 },
+      ] } }],
+  });
+  h.chrome.tabs.get = async id => ({ id, url });
+  h.api.hintPreparation(1, true);
+  await waitUntil(() => h.badges[1] === '1');
+  assert.equal(h.sent.find(message => message.action === 'inspect').url, url);
+  assert.equal(h.inspections(), 1);
+  await h.api.handle({ action: 'analyze', tabId: 1, url });
+  h.network('https://cdn.test/neighbour.mp4');
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(h.inspections(), 1);
+  url = 'https://www.facebook.com/reel/2222222222222222';
+  h.callbacks.onHistoryStateUpdated({ tabId: 1, frameId: 0, url });
+  assert.equal(h.api.preparedSnapshot(1).count, 0);
+  await waitUntil(() => h.inspections() === 2 && h.badges[1] === '1');
+  assert.equal(h.sent.filter(message => message.action === 'inspect').at(-1).url, url);
+  await h.api.handle({ action: 'analyze', tabId: 1, url });
+  assert.equal(h.inspections(), 2);
+});
+
+test('a Reel extractor failure cannot fall back to a neighbouring clip or partial browser recording', async t => {
+  const url = 'https://www.facebook.com/reel/1886118695736589';
+  const h = automaticHarness(t, {
+    page: { pageUrl: url, videoCount: 1, hasBlob: true, sources: [{ url: 'https://cdn.test/prefetched.mp4' }] },
+    inspect(message, reply) { queueMicrotask(() => reply({ id: message.id, ok: false, error: 'This Reel requires login.' })); },
+  });
+  h.chrome.tabs.get = async id => ({ id, url });
+  h.api.hintPreparation(1, true);
+  await waitUntil(() => h.badges[1] === '!');
+  assert.equal(h.api.preparedSnapshot(1).count, 0);
+  assert.match(h.api.preparedSnapshot(1).error, /requires login/);
+  assert.ok(h.sent.filter(message => message.action === 'inspect').every(message => message.url === url));
+  assert.equal(h.sent.some(message => ['prepareBrowser', 'download'].includes(message.action)), false);
+  await assert.rejects(h.api.handle({ action: 'analyze', tabId: 1, url, refresh: true, scanPlayer: true }), /requires login/);
+});
+
+test('extractor page identities survive DOM recycling but change with the Reel permalink', () => {
+  const location = { href: 'https://www.facebook.com/reel/1' };
+  const context = vm.createContext({ location });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../extension/player-identity.js'), 'utf8'), context);
+  const first = context.snapshotPlayerIdentity(null, true);
+  assert.ok(first);
+  assert.equal(first, context.snapshotPlayerIdentity(2, true), 'A preloaded/recycled player must not replace the permalink identity.');
+  location.href = 'https://www.facebook.com/reel/2';
+  assert.notEqual(first, context.snapshotPlayerIdentity(null, true));
+});

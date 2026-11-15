@@ -98,14 +98,22 @@ function withSourceChoices(media, set, selected) {
 
 async function readIdentity(scope) {
   try {
-    const [frame] = await chrome.scripting.executeScript({ target: scope.target, world: 'MAIN', func: snapshotPlayerIdentity, args: [scope.videoIndex ?? null] });
+    const [frame] = await chrome.scripting.executeScript({ target: scope.target, world: 'MAIN', func: snapshotPlayerIdentity, args: [scope.videoIndex ?? null, scope.pageOnly === true] });
     return typeof frame?.result === 'string' ? JSON.stringify([frame.documentId, frame.frameId, frame.result]) : null;
   } catch { return null; }
 }
 
+function isFacebookReel(value) {
+  try {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password &&
+      /(^|\.)facebook\.com$/i.test(url.hostname) && /^\/reels?\/\d+\/?$/.test(url.pathname);
+  } catch { return false; }
+}
+
 function startAnalysis(tabId, url, inspect, { automatic = false, select = true, signal } = {}) {
   const controller = new AbortController();
-  const entry = { tabId, url, automatic, controller, generation: preparationGeneration(tabId), scope: { target: { tabId, frameIds: [0] } } };
+  const entry = { tabId, url, automatic, controller, generation: preparationGeneration(tabId), scope: { target: { tabId, frameIds: [0] }, pageOnly: isFacebookReel(url) } };
   const abort = () => controller.abort();
   signal?.addEventListener('abort', abort, { once: true });
   if (signal?.aborted) abort();
@@ -339,13 +347,18 @@ async function collectSources(tabId, url) {
     source.videoIndex ??= frame?.result?.videoCount ? frame.result.primaryVideoIndex : undefined;
     source.group = JSON.stringify([source.documentId || frame?.documentId || source.frameId, source.videoIndex ?? 'frame']);
   }
-  const set = { url, sources };
-  return { set, frames, main, origins, protectedFrames, captured: captured.length > 0 };
+  // Reel feeds preload neighbouring clips and request partial MP4 tracks. Those
+  // requests do not identify the current Reel. Let yt-dlp resolve the permalink
+  // and its matching audio/video formats instead of guessing from network order.
+  const pageOnly = isFacebookReel(url);
+  const set = { url, sources: pageOnly ? [] : sources };
+  return { set, frames, main, origins, protectedFrames, captured: captured.length > 0, pageOnly };
 }
 
 async function inspectTab(tabId, url, scanOnly = false, entry) {
   let originalError;
-  if (!scanOnly) {
+  const pageOnly = isFacebookReel(url);
+  if (!scanOnly || pageOnly) {
     const [main] = await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, func: discoverPageMedia, args: [true] }).catch(() => []);
     if (main?.result?.hasDrm) throw new Error(protectedVideoMessage);
     let media;
@@ -353,6 +366,9 @@ async function inspectTab(tabId, url, scanOnly = false, entry) {
     catch (error) {
       entry?.controller.signal.throwIfAborted();
       if (error.code === 'DRM_PROTECTED') throw error;
+      // Preserve login/extractor errors. A prefetched neighbouring file (or an
+      // MSE recording) must never silently become this Reel's download.
+      if (pageOnly) throw error;
       originalError = error;
     }
     if (media) {
