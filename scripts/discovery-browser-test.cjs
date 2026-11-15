@@ -74,7 +74,7 @@ async function run(chromium, extensionPath) {
     await other.close();
     const metadata = await worker.evaluate(() => chrome.storage.session.get('captureSession'));
     assert.equal(JSON.stringify(metadata).includes('signature'), false);
-    assert.equal(metadata.captureSession.url, undefined);
+    assert.equal(metadata.captureSession?.url, undefined);
     await page.route('https://**/*', route => route.abort());
     await page.evaluate(() => {
       document.querySelector('video').src = URL.createObjectURL(new Blob(['fixture'], { type: 'video/mp4' }));

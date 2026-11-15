@@ -31,9 +31,11 @@ async function run(chromium, extensionPath) {
     const page = await context.newPage(); const url = `http://127.0.0.1:${server.address().port}/video`;
     await page.goto(url); await page.waitForFunction(() => window.ready === true);
     await worker.evaluate(() => {
+      capturePaused = true;
       pageSources = sourceContext = browserTransfer = browserQualities = analysisCache = true;
       globalThis.testStream = { parts: [], bytes: 0, finished: false, cancelled: false, job: 0, inspections: 0, preparations: 0 };
       request = async (action, data) => {
+        if (action === 'ping') return { capabilities: { pageSources: true, sourceContext: true, browserTransfer: true, browserQualities: true, analysisCache: true } };
         if (action === 'inspect') { testStream.inspections++; throw new Error('HTTP 403: browser-only Service Worker URL.'); }
         if (action === 'cachedMedia') return { available: true };
         if (action === 'prepareBrowser') { testStream.preparations++; return { token: 'browser', browser: true, title: data.metadata.title, options: data.metadata.variants.map((v, i) => ({ id: 'format-' + i, label: v.label + ' · MP4', height: v.height, bytes: v.bytes, container: v.ext })) }; }

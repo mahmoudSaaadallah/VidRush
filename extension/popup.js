@@ -136,6 +136,7 @@ function renderQualities() {
 }
 
 function showMedia(result) {
+  const previousChoice = media?.token === result.token ? $('quality').value : null;
   media = result;
   $('browser-note').hidden = !media.browser;
   text($('audio-note'), media.browser ? 'الملف حسب المصدر' : 'الصوت مضمّن');
@@ -150,6 +151,23 @@ function showMedia(result) {
   $('video-source').value = String(media.sourceIndex ?? 0);
   $('source-picker').hidden = (media.detectedSources?.length || 0) < 2;
   renderQualities(); $('video').hidden = false; showPlaceholder(false);
+  if (previousChoice && media.options.some(choice => choice.id === previousChoice)) { $('quality').value = previousChoice; updateQuality(); }
+}
+
+function showPreparation(state) {
+  if (!state?.status) return;
+  if (state.media?.options?.length) {
+    showMedia(state.media); notice(''); renderDestination(destination);
+    return;
+  }
+  media = null; $('video').hidden = true; renderDestination(destination);
+  if (state.status === 'queued' || state.status === 'analyzing') {
+    showPlaceholder(false); notice('جارٍ تجهيز الجودات في الخلفية…');
+  } else {
+    showPlaceholder(true);
+    text($('placeholder-message'), 'شغّل الفيديو داخل الصفحة لاكتشافه تلقائيًا.');
+    notice(state.status === 'error' ? state.error : '', state.status === 'error' ? 'error' : '');
+  }
 }
 
 async function refreshCaptureState() {
@@ -158,7 +176,7 @@ async function refreshCaptureState() {
   $('start-discovery').hidden = !status.enabled || status.active;
   $('stop-discovery').hidden = !status.active;
   $('disable-discovery').hidden = !status.enabled;
-  text($('capture-status'), status.active ? 'الفحص شغال لهذا التبويب · روابط الفيديو المكتشفة: ' + status.count : status.enabled ? 'الفحص الشامل مفعّل. اختار التبويب من الزر التالي.' : 'الفحص الشامل غير مفعّل.');
+  text($('capture-status'), status.active ? 'التجهيز التلقائي شغال · الفيديوهات الجاهزة: ' + status.count : status.enabled ? 'التجهيز التلقائي متوقف. اضغط تشغيل لاستئنافه.' : 'الفحص الشامل غير مفعّل.');
 }
 
 function createJob(job) {
@@ -239,12 +257,16 @@ async function analyze(refresh = false, scanPlayer = false) {
   activeTab = tab;
   try { $('site').textContent = new URL(activeTab.url).hostname; }
   catch { $('site').textContent = 'افتح صفحة الفيديو'; }
-  media = null;
+  let prepared;
+  if (!refresh) prepared = await call('preparation', { tabId: tab?.id, url: tab?.url }).catch(() => null);
+  if (sequence !== analysisSequence) return;
+  if (prepared?.media) showPreparation(prepared);
+  else media = null;
   playerOrigins = [];
   text($('placeholder-message'), 'افتح صفحة فيديو لعرض الجودات المتاحة.');
   $('scan-player').hidden = true;
   $('scan-hint').hidden = true;
-  $('video').hidden = true;
+  $('video').hidden = !media;
   showPlaceholder(false);
   renderDestination(destination);
   if (!activeTab?.url || !/^https?:\/\//i.test(activeTab.url)) {
@@ -257,7 +279,7 @@ async function analyze(refresh = false, scanPlayer = false) {
   analyzing = true;
   $('refresh').disabled = !connected;
   $('refresh').setAttribute('aria-busy', 'true');
-  notice('جارٍ فحص الفيديو والجودات المتاحة…');
+  if (!media) notice('جارٍ تجهيز الجودات في الخلفية…');
   try {
     const selection = { tabId: activeTab.id, url: activeTab.url };
     let result;
@@ -297,6 +319,7 @@ async function analyze(refresh = false, scanPlayer = false) {
 async function initialize() {
   $('reconnect').disabled = true;
   notice('جارٍ الاتصال بالبرنامج المساعد…');
+  void call('preparation', { tabId: activeTab?.id, url: activeTab?.url }).then(showPreparation).catch(() => {});
   try {
     const { companion, jobs } = await call('bootstrap');
     connected = true;
@@ -362,7 +385,8 @@ $('activate-update').addEventListener('click', async () => {
 $('reconnect').addEventListener('click', () => void initialize());
 $('refresh').addEventListener('click', () => void analyze(true));
 $('video-source').addEventListener('change', async () => {
-  const sourceIndex = Number($('video-source').value);
+  const value = $('video-source').value;
+  const sourceIndex = value.startsWith('ready:') ? value : Number(value);
   media = null; renderDestination(destination); $('video-source').disabled = true;
   try {
     const result = await call('selectSource', { tabId: activeTab.id, url: activeTab.url, sourceIndex });
@@ -397,7 +421,12 @@ async function stopCapture() { await call('stopCapture', { tabId: activeTab?.id 
 $('stop-discovery').addEventListener('click', () => { void stopCapture().catch(error => text($('capture-status'), error.message)); });
 $('disable-discovery').addEventListener('click', async () => {
   $('disable-discovery').disabled = true;
-  try { await call('stopCapture', { tabId: activeTab?.id }); await chrome.permissions.remove({ origins: SCAN_ORIGINS }); await refreshCaptureState(); }
+  try {
+    await call('stopCapture', { tabId: activeTab?.id });
+    const removed = await chrome.permissions.remove({ origins: SCAN_ORIGINS }).catch(() => false);
+    await refreshCaptureState();
+    if (!removed) text($('capture-status'), 'التجهيز التلقائي متوقف. لتغيير وصول المواقع، افتح تفاصيل VidRush في chrome://extensions.');
+  }
   catch (error) { text($('capture-status'), error.message); }
   finally { $('disable-discovery').disabled = false; }
 });
@@ -441,6 +470,11 @@ $('download').addEventListener('click', async () => {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'session' && changes.jobs) renderJobs(changes.jobs.newValue || []);
   if (area === 'session' && changes.destination) renderDestination(changes.destination.newValue || {});
+  if (area === 'session' && changes.preparations) {
+    const state = changes.preparations.newValue?.[activeTab?.id];
+    if (state) showPreparation(state);
+    else if (media) showPreparation({ status: 'waiting' });
+  }
 });
 (async () => {
   await loadTheme();
